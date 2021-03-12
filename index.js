@@ -9,8 +9,8 @@ const rl = readline.createInterface({
 const waitForUserInput = function () {
   rl.question("", (text) => {
     try {
-      const r = basic("<stdin>", text);
-      console.log(r.toString());
+      const rtRes = basic("<stdin>", text);
+      console.log(rtRes.value);
     } catch (error) {
       console.log(error.toString());
     }
@@ -20,4 +20,4 @@ const waitForUserInput = function () {
 
 waitForUserInput();
 
-// basic("<stdin>", "1+2*3");
+// basic("<stdin>", "1+2");

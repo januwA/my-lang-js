@@ -51,7 +51,7 @@ class Error {
 
   toString() {
     let err = `${this.name}: '${this.message}'\n`;
-    err += `File: '${this.posStart.fileName}' index(${this.posStart.index}), row(${this.posStart.row}), col(${this.posStart.col})\n\n`;
+    err += `\tFile: '${this.posStart.fileName}' row(${this.posStart.row}), col(${this.posStart.col})\n\n`;
     err += stringsWithArrows(
       this.posStart.fileText,
       this.posStart,
@@ -71,6 +71,40 @@ class IllegalCharError extends Error {
 class InvalidSyntaxError extends Error {
   constructor(posStart, posEnd, message) {
     super("Invalid Syntax", posStart, posEnd, message);
+  }
+}
+
+class RTError extends Error {
+  constructor(posStart, posEnd, message, context) {
+    super("Runtime Error", posStart, posEnd, message);
+    this.context = context;
+  }
+
+  toString() {
+    let err = "";
+    err += this.generateTraceback();
+    err += `${this.name}: '${this.message}'\n`;
+    err += stringsWithArrows(
+      this.posStart.fileText,
+      this.posStart,
+      this.posEnd
+    );
+    err += "\n";
+    return err;
+  }
+
+  generateTraceback() {
+    let err = "";
+    err += 'Traceback (most recent call last):\n'
+    let pos = this.posStart;
+    let ctx = this.context;
+
+    while (ctx) {
+      err += `\tFile: '${pos.fileName}' row(${pos.row}), col(${pos.col}), in ${ctx.contextName}\n`;
+      pos = ctx.parentEntryPos;
+      ctx = ctx.parent;
+    }
+    return err;
   }
 }
 
@@ -191,10 +225,15 @@ class Lexer {
   }
 }
 
+class Node {}
+
 // 数字节点
-class NumberNode {
+class NumberNode extends Node {
   constructor(token) {
+    super();
     this.token = token;
+    this.posStart = token.posStart;
+    this.posEnd = token.posEnd;
   }
 
   toString() {
@@ -202,10 +241,14 @@ class NumberNode {
   }
 }
 
-class UnaryOpNode {
+class UnaryOpNode extends Node {
   constructor(token, node) {
+    super();
     this.token = token;
     this.node = node;
+
+    this.posStart = token.posStart;
+    this.posEnd = node.posEnd;
   }
 
   toString() {
@@ -214,11 +257,15 @@ class UnaryOpNode {
 }
 
 // 运算节点
-class BinOpNode {
+class BinOpNode extends Node {
   constructor(leftNode, token, rightNode) {
+    super();
     this.leftNode = leftNode;
     this.token = token;
     this.rightNode = rightNode;
+
+    this.posStart = leftNode.posStart;
+    this.posEnd = rightNode.posEnd;
   }
 
   toString() {
@@ -313,9 +360,9 @@ class Parser {
       } else {
         return res.failure(
           new InvalidSyntaxError(
-            `Expected ')'`,
             this.curToken.posStart,
-            this.curToken.posEnd
+            this.curToken.posEnd,
+            `Expected ')'`
           )
         );
       }
@@ -357,14 +404,179 @@ class Parser {
   }
 }
 
+class RTResult {
+  constructor() {
+    this.error = null;
+    this.value = null;
+  }
+
+  hasError() {
+    return !!this.error;
+  }
+
+  register(res) {
+    if (res instanceof RTResult) {
+      if (res.error) this.error = res.error;
+      return res.value;
+    } else {
+      return res;
+    }
+  }
+
+  success(value) {
+    this.value = value;
+    return this;
+  }
+
+  failure(error) {
+    this.error = error;
+    return this;
+  }
+}
+
+class NumberValue {
+  constructor(value) {
+    this.value = value;
+    this.setPos();
+    this.setContext();
+  }
+
+  setPos(posStart, posEnd) {
+    this.posStart = posStart;
+    this.posEnd = posEnd;
+    return this;
+  }
+
+  setContext(context) {
+    this.context = context;
+    return this;
+  }
+
+  add(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(this.value + other.value).setContext(this.context);
+    }
+  }
+
+  sub(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(this.value - other.value).setContext(this.context);
+    }
+  }
+  mul(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(this.value * other.value).setContext(this.context);
+    }
+  }
+  div(other) {
+    if (other instanceof NumberValue) {
+      if (other.value === 0) {
+        throw new RTError(
+          other.posStart,
+          other.posEnd,
+          "Division by zero",
+          this.context
+        );
+      }
+      return new NumberValue(this.value / other.value).setContext(this.context);
+    }
+  }
+
+  toString() {
+    return this.value.toString();
+  }
+}
+
+// 保存当前程序的上下文
+class Context {
+  constructor(contextName, parent, parentEntryPos) {
+    this.contextName = contextName;
+    this.parent = parent;
+    this.parentEntryPos = parentEntryPos;
+  }
+}
+
+// 解释器
+class Interpreter {
+  constructor() {}
+
+  visit(node, context) {
+    if (node instanceof NumberNode) {
+      return this.visitNumberNode(node, context);
+    } else if (node instanceof BinOpNode) {
+      return this.visitBinOpNode(node, context);
+    } else if (node instanceof UnaryOpNode) {
+      return this.visitUnaryOpNode(node, context);
+    } else {
+      // error
+    }
+  }
+
+  visitNumberNode(node, context) {
+    return new RTResult().success(
+      new NumberValue(node.token.value)
+        .setContext(context)
+        .setPos(node.posStart, node.posEnd)
+    );
+  }
+  visitBinOpNode(node, context) {
+    const res = new RTResult();
+    const left = res.register(this.visit(node.leftNode, context));
+    if (res.hasError()) return res;
+
+    const right = res.register(this.visit(node.rightNode, context));
+    if (res.hasError()) return res;
+
+    let result;
+    switch (node.token.type) {
+      case TT_PLUS:
+        result = left.add(right);
+        break;
+      case TT_MINUS:
+        result = left.sub(right);
+        break;
+      case TT_MUL:
+        result = left.mul(right);
+        break;
+      case TT_DIV:
+        try {
+          result = left.div(right);
+        } catch (error) {
+          res.failure(error);
+          return res;
+        }
+        break;
+    }
+    return res.success(result.setPos(node.posStart, node.posEnd));
+  }
+  visitUnaryOpNode(node, context) {
+    const res = new RTResult();
+    let num = res.register(this.visit(node.node, context));
+    if (res.hasError()) return res;
+
+    if (node.token.type == TT_MINUS) {
+      num = num.mul(NumberValue(-1));
+    }
+
+    return res.success(num.setPos(node.posStart, node.posEnd));
+  }
+}
+
 module.exports = function run(fileName, text) {
+  // Generate tokens
   const lexer = new Lexer(fileName, text);
   const tokens = lexer.makeTokens();
 
+  // generate AST
   const parser = new Parser(tokens);
   const res = parser.parse();
-  if (res.error) {
-    throw res.error;
-  }
-  return res.node;
+  if (res.error) throw res.error;
+
+  // run progra
+  const interpreter = new Interpreter();
+  const context = new Context("<program>");
+  const rtRes = interpreter.visit(res.node, context);
+
+  if (rtRes.error) throw rtRes.error;
+  return rtRes.value;
 };
