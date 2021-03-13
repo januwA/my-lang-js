@@ -8,6 +8,7 @@ const TT_PLUS = "PLUS"; // +
 const TT_MINUS = "MINUS"; // -
 const TT_MUL = "MUL"; // *
 const TT_DIV = "DIV"; // /
+const TT_POW = "POW"; // **
 const TT_LPAREN = "LPAREN"; // (
 const TT_RPAREN = "RPAREN"; // )
 const TT_EOF = "EOF";
@@ -95,7 +96,7 @@ class RTError extends Error {
 
   generateTraceback() {
     let err = "";
-    err += 'Traceback (most recent call last):\n'
+    err += "Traceback (most recent call last):\n";
     let pos = this.posStart;
     let ctx = this.context;
 
@@ -130,6 +131,11 @@ class Token {
   }
 }
 
+/**
+ * ## 词法分析器
+ * 只做词法分析和检测错误的符号
+ * 不做语法检查
+ */
 class Lexer {
   constructor(fileName, text) {
     this.fileName = fileName;
@@ -172,8 +178,14 @@ class Lexer {
           break;
 
         case "*":
-          tokens.push(new Token(TT_MUL, null, this.pos));
-          this.advance();
+          if (this.text[this.pos.index + 1] === "*") {
+            this.advance();
+            tokens.push(new Token(TT_POW, null, this.pos));
+            this.advance();
+          } else {
+            tokens.push(new Token(TT_MUL, null, this.pos));
+            this.advance();
+          }
           break;
 
         case "/":
@@ -303,7 +315,10 @@ class ParseRusult {
   }
 }
 
-// 解析Lexer
+/**
+ * ## 解析器
+ * 解析Lexer，并进行语法检查
+ */
 class Parser {
   constructor(tokens) {
     this.tokens = tokens;
@@ -335,17 +350,11 @@ class Parser {
     return res;
   }
 
-  factor() {
+  atom() {
     const res = new ParseRusult();
     const token = this.curToken;
 
-    if (token.type === TT_PLUS || token.type === TT_MINUS) {
-      // +1 or -1
-      res.register(this.advance());
-      const _factor = res.register(this.factor());
-      if (res.error) return res;
-      else return res.success(new UnaryOpNode(token, _factor));
-    } else if (token.type === TT_INT || token.type === TT_FLOAT) {
+    if (token.type === TT_INT || token.type === TT_FLOAT) {
       // 1 or 1.2
       res.register(this.advance());
       return res.success(new NumberNode(token));
@@ -377,6 +386,25 @@ class Parser {
     }
   }
 
+  power() {
+    return this.binOp(this.atom.bind(this), [TT_POW], this.factor.bind(this));
+  }
+
+  factor() {
+    const res = new ParseRusult();
+    const token = this.curToken;
+
+    if (token.type === TT_PLUS || token.type === TT_MINUS) {
+      // +1 or -1
+      res.register(this.advance());
+      const _factor = res.register(this.factor());
+      if (res.error) return res;
+      else return res.success(new UnaryOpNode(token, _factor));
+    }
+
+    return this.power();
+  }
+
   term() {
     return this.binOp(this.factor.bind(this), [TT_MUL, TT_DIV]);
   }
@@ -385,16 +413,18 @@ class Parser {
     return this.binOp(this.term.bind(this), [TT_PLUS, TT_MINUS]);
   }
 
-  binOp(handle, ops) {
+  binOp(handle_a, ops, handle_b) {
+    if (!handle_b) handle_b = handle_a;
+
     const res = new ParseRusult();
-    let leftNode = res.register(handle()); // number节点
+    let leftNode = res.register(handle_a()); // number节点
     if (res.error) return res;
 
     while (ops.includes(this.curToken.type)) {
       // 运算符号节点
       const token = this.curToken;
       res.register(this.advance());
-      const rightNode = res.register(handle()); // number节点
+      const rightNode = res.register(handle_b()); // number节点
       if (res.error) return res;
 
       // 递归
@@ -481,7 +511,13 @@ class NumberValue {
       return new NumberValue(this.value / other.value).setContext(this.context);
     }
   }
-
+  pow(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(this.value ** other.value).setContext(
+        this.context
+      );
+    }
+  }
   toString() {
     return this.value.toString();
   }
@@ -496,7 +532,7 @@ class Context {
   }
 }
 
-// 解释器
+// 解释器,解释Parser
 class Interpreter {
   constructor() {}
 
@@ -546,6 +582,9 @@ class Interpreter {
           return res;
         }
         break;
+      case TT_POW:
+        result = left.pow(right);
+        break;
     }
     return res.success(result.setPos(node.posStart, node.posEnd));
   }
@@ -555,7 +594,7 @@ class Interpreter {
     if (res.hasError()) return res;
 
     if (node.token.type == TT_MINUS) {
-      num = num.mul(NumberValue(-1));
+      num = num.mul(new NumberValue(-1));
     }
 
     return res.success(num.setPos(node.posStart, node.posEnd));
@@ -566,6 +605,7 @@ module.exports = function run(fileName, text) {
   // Generate tokens
   const lexer = new Lexer(fileName, text);
   const tokens = lexer.makeTokens();
+  // console.log(tokens.map((it) => it.toString()));
 
   // generate AST
   const parser = new Parser(tokens);
