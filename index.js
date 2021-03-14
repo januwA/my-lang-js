@@ -20,4 +20,4 @@ const waitForUserInput = function () {
 
 waitForUserInput();
 
-// basic("<stdin>", "1+2");
+// basic("<stdin>", "var a = 1");

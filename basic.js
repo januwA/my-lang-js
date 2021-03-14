@@ -1,17 +1,22 @@
 const stringsWithArrows = require("./strings-with-arrows");
 
-const DIGITS = "0123456789.";
+const DIGITS = /[^0-9\.]/;
+const LETTERS = /[^a-zA-Z0-9_]/;
 
 const TT_INT = "INT";
 const TT_FLOAT = "FLOAT";
+const TT_IDENTIFIER = "IDENTIFIER";
+const TT_KEYWORD = "KEYWORD";
 const TT_PLUS = "PLUS"; // +
 const TT_MINUS = "MINUS"; // -
 const TT_MUL = "MUL"; // *
 const TT_DIV = "DIV"; // /
 const TT_POW = "POW"; // **
+const TT_EQ = "EQ";
 const TT_LPAREN = "LPAREN"; // (
 const TT_RPAREN = "RPAREN"; // )
 const TT_EOF = "EOF";
+const KEYWORDS = ["var"];
 
 class Position {
   constructor(index, row, col, fileName, fileText) {
@@ -124,6 +129,10 @@ class Token {
     }
   }
 
+  matches(type, value) {
+    return this.type == type && this.value == value;
+  }
+
   toString() {
     return this.value !== undefined && this.value !== null
       ? `${this.type}:${this.value}`
@@ -158,10 +167,16 @@ class Lexer {
     const tokens = [];
 
     while (this.curChar !== null) {
-      if (DIGITS.includes(this.curChar)) {
+      if (!DIGITS.test(this.curChar)) {
         tokens.push(this.makeNumber());
         continue;
       }
+
+      if (!LETTERS.test(this.curChar)) {
+        tokens.push(this.makeIdentifier());
+        continue;
+      }
+
       switch (this.curChar) {
         case " ":
         case "\t":
@@ -203,6 +218,11 @@ class Lexer {
           this.advance();
           break;
 
+        case "=":
+          tokens.push(new Token(TT_EQ, null, this.pos));
+          this.advance();
+          break;
+
         default:
           const posStart = this.pos.copy();
           const c = this.curChar;
@@ -220,7 +240,7 @@ class Lexer {
     let isDot = false;
     const posStart = this.pos.copy();
 
-    while (this.curChar !== null && DIGITS.includes(this.curChar)) {
+    while (this.curChar !== null && !DIGITS.test(this.curChar)) {
       if (this.curChar === ".") {
         if (isDot === true) break; // error
         isDot = true;
@@ -234,6 +254,18 @@ class Lexer {
 
     if (isDot) return new Token(TT_FLOAT, Number(numStr), posStart, this.pos);
     else return new Token(TT_INT, Number(numStr), posStart, this.pos);
+  }
+
+  makeIdentifier() {
+    let idStr = "";
+    const posStart = this.pos.copy();
+    while (this.curChar !== null && !LETTERS.test(this.curChar)) {
+      idStr += this.curChar;
+      this.advance();
+    }
+    let tokenType = TT_IDENTIFIER;
+    if (KEYWORDS.includes(idStr)) tokenType = TT_KEYWORD;
+    return new Token(tokenType, idStr, posStart, this.pos);
   }
 }
 
@@ -250,6 +282,23 @@ class NumberNode extends Node {
 
   toString() {
     return this.token.toString();
+  }
+}
+class VarAccessNode extends Node {
+  constructor(varNameToken) {
+    super();
+    this.varNameToken = varNameToken;
+    this.posStart = varNameToken.posStart;
+    this.posEnd = varNameToken.posEnd;
+  }
+}
+class VarAssignNode extends Node {
+  constructor(varNameToken, valueNode) {
+    super();
+    this.varNameToken = varNameToken;
+    this.valueNode = valueNode;
+    this.posStart = varNameToken.posStart;
+    this.posEnd = valueNode.posEnd;
   }
 }
 
@@ -289,19 +338,21 @@ class ParseRusult {
   constructor() {
     this.error = null;
     this.node = null;
+    this.advanceCount = 0;
   }
 
   hasError() {
     return !!this.error;
   }
 
+  registerAdvancement() {
+    this.advanceCount++;
+  }
+
   register(res) {
-    if (res instanceof ParseRusult) {
-      if (res.error) this.error = res.error;
-      return res.node;
-    } else {
-      return res;
-    }
+    this.advanceCount += res.advanceCount;
+    if (res.error) this.error = res.error;
+    return res.node;
   }
 
   success(node) {
@@ -310,7 +361,9 @@ class ParseRusult {
   }
 
   failure(error) {
-    this.error = error;
+    if (!this.hasError() || this.advanceCount === 0) {
+      this.error = error;
+    }
     return this;
   }
 }
@@ -356,15 +409,23 @@ class Parser {
 
     if (token.type === TT_INT || token.type === TT_FLOAT) {
       // 1 or 1.2
-      res.register(this.advance());
+      res.registerAdvancement();
+      this.advance();
       return res.success(new NumberNode(token));
+    } else if (token.type === TT_IDENTIFIER) {
+      // a + b
+      res.registerAdvancement();
+      this.advance();
+      return res.success(new VarAccessNode(token));
     } else if (token.type === TT_LPAREN) {
       // (1)
-      res.register(this.advance());
+      res.registerAdvancement();
+      this.advance();
       const _expr = res.register(this.expr());
       if (res.hasError()) return res;
       if (this.curToken.type === TT_RPAREN) {
-        res.register(this.advance());
+        res.registerAdvancement();
+        this.advance();
         return res.success(_expr);
       } else {
         return res.failure(
@@ -380,7 +441,7 @@ class Parser {
         new InvalidSyntaxError(
           token.posStart,
           token.posEnd,
-          `Expected int or float`
+          `Expected int, float, identifier, '+', '-' or '('`
         )
       );
     }
@@ -396,7 +457,8 @@ class Parser {
 
     if (token.type === TT_PLUS || token.type === TT_MINUS) {
       // +1 or -1
-      res.register(this.advance());
+      res.registerAdvancement();
+      this.advance();
       const _factor = res.register(this.factor());
       if (res.error) return res;
       else return res.success(new UnaryOpNode(token, _factor));
@@ -410,7 +472,53 @@ class Parser {
   }
 
   expr() {
-    return this.binOp(this.term.bind(this), [TT_PLUS, TT_MINUS]);
+    const res = new ParseRusult();
+    if (this.curToken.matches(TT_KEYWORD, "var")) {
+      // var a = 1
+      res.registerAdvancement();
+      this.advance();
+      if (this.curToken.type !== TT_IDENTIFIER) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            "Expected identifier"
+          )
+        );
+      }
+
+      const varName = this.curToken;
+      res.registerAdvancement();
+      this.advance();
+
+      if (this.curToken.type !== TT_EQ) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            "Expected '='"
+          )
+        );
+      }
+
+      res.registerAdvancement();
+      this.advance();
+      const valueNode = res.register(this.expr()); // value
+      if (res.hasError()) return res;
+      return res.success(new VarAssignNode(varName, valueNode));
+    }
+    const node = res.register(
+      this.binOp(this.term.bind(this), [TT_PLUS, TT_MINUS])
+    );
+    if (res.hasError())
+      return err.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'var', int, float, identifier, '+', '-' or '('`
+        )
+      );
+    return res.success(node);
   }
 
   binOp(handle_a, ops, handle_b) {
@@ -423,7 +531,8 @@ class Parser {
     while (ops.includes(this.curToken.type)) {
       // 运算符号节点
       const token = this.curToken;
-      res.register(this.advance());
+      res.registerAdvancement();
+      this.advance();
       const rightNode = res.register(handle_b()); // number节点
       if (res.error) return res;
 
@@ -521,6 +630,13 @@ class NumberValue {
   toString() {
     return this.value.toString();
   }
+
+  copy() {
+    const result = new NumberValue(this.value);
+    result.setPos(this.posStart, this.posEnd);
+    result.setContext(this.context);
+    return result;
+  }
 }
 
 // 保存当前程序的上下文
@@ -529,6 +645,31 @@ class Context {
     this.contextName = contextName;
     this.parent = parent;
     this.parentEntryPos = parentEntryPos;
+    this.symbolTable = null;
+  }
+}
+
+// 储存所有变量
+class SymbolTable {
+  constructor() {
+    this.symbols = {};
+    this.parent = null; // parent context symbol table
+  }
+
+  get(name) {
+    const value = this.symbols[name] ?? null;
+    if (value === null && this.parent) {
+      return this.parent.get(name);
+    }
+    return value;
+  }
+
+  set(name, value) {
+    this.symbols[name] = value;
+  }
+
+  del(name) {
+    delete this.symbols[name];
   }
 }
 
@@ -543,9 +684,46 @@ class Interpreter {
       return this.visitBinOpNode(node, context);
     } else if (node instanceof UnaryOpNode) {
       return this.visitUnaryOpNode(node, context);
+    } else if (node instanceof VarAccessNode) {
+      return this.visitVarAccessNode(node, context);
+    } else if (node instanceof VarAssignNode) {
+      return this.visitVarAssignNode(node, context);
     } else {
       // error
     }
+  }
+
+  // 访问变量
+  visitVarAccessNode(node, context) {
+    const res = new RTResult();
+    const varName = node.varNameToken.value;
+    let value = context.symbolTable.get(varName);
+    if (value === null) {
+      return res.failure(
+        new RTError(
+          node.posStart,
+          node.posEnd,
+          `"${varName}" is not defined`,
+          context
+        )
+      );
+    }
+
+    // 修复错误消息定位
+    // var a = 0
+    // 10 / a
+    value = value.copy().setPos(node.posStart, node.posEnd);
+    return res.success(value);
+  }
+
+  // 定义变量
+  visitVarAssignNode(node, context) {
+    const res = new RTResult();
+    const varName = node.varNameToken.value;
+    const value = res.register(this.visit(node.valueNode, context)); // 获取value
+    if (res.hasError()) return res;
+    context.symbolTable.set(varName, value);
+    return res.success(value);
   }
 
   visitNumberNode(node, context) {
@@ -601,6 +779,9 @@ class Interpreter {
   }
 }
 
+const globalSymbolTable = new SymbolTable();
+globalSymbolTable.set("null", new NumberValue(0));
+
 module.exports = function run(fileName, text) {
   // Generate tokens
   const lexer = new Lexer(fileName, text);
@@ -615,6 +796,7 @@ module.exports = function run(fileName, text) {
   // run progra
   const interpreter = new Interpreter();
   const context = new Context("<program>");
+  context.symbolTable = globalSymbolTable;
   const rtRes = interpreter.visit(res.node, context);
 
   if (rtRes.error) throw rtRes.error;
