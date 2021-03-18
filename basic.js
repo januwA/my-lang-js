@@ -15,8 +15,14 @@ const TT_POW = "POW"; // **
 const TT_EQ = "EQ";
 const TT_LPAREN = "LPAREN"; // (
 const TT_RPAREN = "RPAREN"; // )
+const TT_EE = "EE"; // ==
+const TT_NE = "NE"; // !=
+const TT_LT = "LT"; // <
+const TT_GT = "GT"; // >
+const TT_LTE = "LTE"; // <=
+const TT_GTE = "GTE"; // >=
 const TT_EOF = "EOF";
-const KEYWORDS = ["var"];
+const KEYWORDS = ["var", "&&", "||", "!"];
 
 class Position {
   constructor(index, row, col, fileName, fileText) {
@@ -193,14 +199,7 @@ class Lexer {
           break;
 
         case "*":
-          if (this.text[this.pos.index + 1] === "*") {
-            this.advance();
-            tokens.push(new Token(TT_POW, null, this.pos));
-            this.advance();
-          } else {
-            tokens.push(new Token(TT_MUL, null, this.pos));
-            this.advance();
-          }
+          tokens.push(this.makeMultiplication());
           break;
 
         case "/":
@@ -218,11 +217,24 @@ class Lexer {
           this.advance();
           break;
 
-        case "=":
-          tokens.push(new Token(TT_EQ, null, this.pos));
-          this.advance();
+        case "!":
+          tokens.push(this.makeNotEquals());
           break;
-
+        case "=":
+          tokens.push(this.makeEquals());
+          break;
+        case ">":
+          tokens.push(this.makeGreaterThan());
+          break;
+        case "<":
+          tokens.push(this.makeLessThan());
+          break;
+        case "&":
+          tokens.push(this.makeAnd());
+          break;
+        case "|":
+          tokens.push(this.makeOr());
+          break;
         default:
           const posStart = this.pos.copy();
           const c = this.curChar;
@@ -233,6 +245,19 @@ class Lexer {
 
     tokens.push(new Token(TT_EOF, null, this.pos));
     return tokens;
+  }
+
+  makeMultiplication() {
+    const posStart = this.pos.copy();
+    let tokenType = TT_MUL;
+    this.advance();
+
+    if (this.curChar === "*") {
+      this.advance();
+      tokenType = TT_POW;
+    }
+
+    return new Token(tokenType, null, posStart, this.pos);
   }
 
   makeNumber() {
@@ -266,6 +291,81 @@ class Lexer {
     let tokenType = TT_IDENTIFIER;
     if (KEYWORDS.includes(idStr)) tokenType = TT_KEYWORD;
     return new Token(tokenType, idStr, posStart, this.pos);
+  }
+
+  makeAnd() {
+    const posStart = this.pos.copy();
+    this.advance();
+
+    if (this.curChar === "&") {
+      this.advance();
+      return new Token(TT_KEYWORD, "&&", posStart, this.pos);
+    } else {
+      // bits not
+      // return new Token(TT_KEYWORD, "|", posStart, this.pos);
+    }
+  }
+
+  makeOr() {
+    const posStart = this.pos.copy();
+    this.advance();
+
+    if (this.curChar === "|") {
+      this.advance();
+      return new Token(TT_KEYWORD, "||", posStart, this.pos);
+    } else {
+      // bits or
+      // return new Token(TT_KEYWORD, "|", posStart, this.pos);
+    }
+  }
+
+  makeNotEquals() {
+    const posStart = this.pos.copy();
+    this.advance();
+
+    if (this.curChar === "=") {
+      this.advance();
+      return new Token(TT_NE, null, posStart, this.pos);
+    } else {
+      // not
+      return new Token(TT_KEYWORD, "!", posStart, this.pos);
+    }
+  }
+
+  makeEquals() {
+    const posStart = this.pos.copy();
+    let tokenType = TT_EQ;
+    this.advance();
+
+    if (this.curChar === "=") {
+      this.advance();
+      tokenType = TT_EE;
+    }
+    return new Token(tokenType, null, posStart, this.pos);
+  }
+
+  makeLessThan() {
+    const posStart = this.pos.copy();
+    let tokenType = TT_LT;
+    this.advance();
+
+    if (this.curChar === "=") {
+      this.advance();
+      tokenType = TT_LTE;
+    }
+    return new Token(tokenType, null, posStart, this.pos);
+  }
+
+  makeGreaterThan() {
+    const posStart = this.pos.copy();
+    let tokenType = TT_GT;
+    this.advance();
+
+    if (this.curChar === "=") {
+      this.advance();
+      tokenType = TT_GTE;
+    }
+    return new Token(tokenType, null, posStart, this.pos);
   }
 }
 
@@ -471,6 +571,45 @@ class Parser {
     return this.binOp(this.factor.bind(this), [TT_MUL, TT_DIV]);
   }
 
+  arithExpr() {
+    return this.binOp(this.term.bind(this), [TT_PLUS, TT_MINUS]);
+  }
+
+  compExpr() {
+    const res = new ParseRusult();
+    let node;
+    if (this.curToken.matches(TT_KEYWORD, "!")) {
+      const opToken = this.curToken;
+      res.registerAdvancement();
+      this.advance();
+      node = res.register(this.compExpr());
+      if (res.hasError()) return res;
+      return res.success(new UnaryOpNode(opToken, node));
+    }
+
+    node = res.register(
+      this.binOp(this.arithExpr.bind(this), [
+        TT_EE,
+        TT_NE,
+        TT_LT,
+        TT_GT,
+        TT_LTE,
+        TT_GTE,
+      ])
+    );
+
+    if (res.hasError())
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected int, float, identifier, '+', '-', '(', '!'`
+        )
+      );
+
+    return res.success(node);
+  }
+
   expr() {
     const res = new ParseRusult();
     if (this.curToken.matches(TT_KEYWORD, "var")) {
@@ -507,8 +646,9 @@ class Parser {
       if (res.hasError()) return res;
       return res.success(new VarAssignNode(varName, valueNode));
     }
+
     const node = res.register(
-      this.binOp(this.term.bind(this), [TT_PLUS, TT_MINUS])
+      this.binOp(this.compExpr.bind(this), [TT_KEYWORD])
     );
     if (res.hasError())
       return err.failure(
@@ -627,6 +767,75 @@ class NumberValue {
       );
     }
   }
+
+  cmpEq(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value === other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  cmpNe(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value !== other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  cmpLt(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value < other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  cmpGt(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value > other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  cmpLte(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value <= other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  cmpGte(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value >= other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  and(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value && other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  or(other) {
+    if (other instanceof NumberValue) {
+      return new NumberValue(Number(this.value || other.value)).setContext(
+        this.context
+      );
+    }
+  }
+
+  not() {
+    return new NumberValue(Number(!this.value)).setContext(this.context);
+  }
+
   toString() {
     return this.value.toString();
   }
@@ -763,24 +972,53 @@ class Interpreter {
       case TT_POW:
         result = left.pow(right);
         break;
+      case TT_EE:
+        result = left.cmpEq(right);
+        break;
+      case TT_NE:
+        result = left.cmpNe(right);
+        break;
+      case TT_LT:
+        result = left.cmpLt(right);
+        break;
+      case TT_GT:
+        result = left.cmpGt(right);
+        break;
+      case TT_LTE:
+        result = left.cmpLte(right);
+        break;
+      case TT_GTE:
+        result = left.cmpGte(right);
+        break;
+      case TT_KEYWORD:
+        if (node.token.matches(TT_KEYWORD, "&&")) {
+          result = left.and(right);
+        } else if (node.token.matches(TT_KEYWORD, "||")) {
+          result = left.or(right);
+        }
+        break;
     }
     return res.success(result.setPos(node.posStart, node.posEnd));
   }
   visitUnaryOpNode(node, context) {
     const res = new RTResult();
-    let num = res.register(this.visit(node.node, context));
+    let numberValue = res.register(this.visit(node.node, context));
     if (res.hasError()) return res;
 
     if (node.token.type == TT_MINUS) {
-      num = num.mul(new NumberValue(-1));
+      numberValue = numberValue.mul(new NumberValue(-1));
+    } else if (node.token.matches(TT_KEYWORD, "!")) {
+      numberValue = numberValue.not();
     }
 
-    return res.success(num.setPos(node.posStart, node.posEnd));
+    return res.success(numberValue.setPos(node.posStart, node.posEnd));
   }
 }
 
 const globalSymbolTable = new SymbolTable();
 globalSymbolTable.set("null", new NumberValue(0));
+globalSymbolTable.set("true", new NumberValue(1));
+globalSymbolTable.set("false", new NumberValue(0));
 
 module.exports = function run(fileName, text) {
   // Generate tokens
