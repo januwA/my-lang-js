@@ -15,6 +15,11 @@ power      : atom (POW factor)*
 
 atom       : INT|FLAOT|IDENTIFIER
            : LPAREN expr RPAREN
+           : if-expr
+
+if-expr    : KEYWORD:if expr KEYWORD:then expr
+           : (KEYWORD:elif expr KEYWORD:then expr)*
+           : (KEYWORD:else expr)?
 
 
 

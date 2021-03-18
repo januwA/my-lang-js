@@ -22,7 +22,7 @@ const TT_GT = "GT"; // >
 const TT_LTE = "LTE"; // <=
 const TT_GTE = "GTE"; // >=
 const TT_EOF = "EOF";
-const KEYWORDS = ["var", "&&", "||", "!"];
+const KEYWORDS = ["var", "&&", "||", "!", "if", "then", "elif", "else"];
 
 class Position {
   constructor(index, row, col, fileName, fileText) {
@@ -417,6 +417,18 @@ class UnaryOpNode extends Node {
   }
 }
 
+class IfNode extends Node {
+  constructor(cases, elseCase) {
+    super();
+    this.cases = cases;
+    this.elseCase = elseCase;
+    this.posStart = cases[0][0].posStart;
+    this.posEnd = elseCase
+      ? elseCase.posEnd
+      : cases[cases.length - 1][0].posEnd;
+  }
+}
+
 // 运算节点
 class BinOpNode extends Node {
   constructor(leftNode, token, rightNode) {
@@ -451,7 +463,7 @@ class ParseRusult {
 
   register(res) {
     this.advanceCount += res.advanceCount;
-    if (res.error) this.error = res.error;
+    if (res.hasError()) this.error = res.error;
     return res.node;
   }
 
@@ -503,6 +515,80 @@ class Parser {
     return res;
   }
 
+  ifExpr() {
+    const res = new ParseRusult();
+    const cases = [];
+    let elseCase = null;
+
+    if (!this.curToken.matches(TT_KEYWORD, "if")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'if'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const condition = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    if (!this.curToken.matches(TT_KEYWORD, "then")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'then'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const _expr = res.register(this.expr());
+    if (res.hasError()) return res;
+    cases.push([condition, _expr]);
+
+    while (this.curToken.matches(TT_KEYWORD, "elif")) {
+      res.registerAdvancement();
+      this.advance();
+
+      const condition = res.register(this.expr());
+      if (res.hasError()) return res;
+
+      if (!this.curToken.matches(TT_KEYWORD, "then")) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected 'then'`
+          )
+        );
+      }
+
+      res.registerAdvancement();
+      this.advance();
+
+      const _expr = res.register(this.expr());
+      if (res.hasError()) return res;
+      cases.push([condition, _expr]);
+    }
+
+    if (this.curToken.matches(TT_KEYWORD, "else")) {
+      res.registerAdvancement();
+      this.advance();
+
+      elseCase = res.register(this.expr());
+      if (res.hasError()) return res;
+    }
+
+    return res.success(new IfNode(cases, elseCase));
+  }
+
   atom() {
     const res = new ParseRusult();
     const token = this.curToken;
@@ -536,6 +622,10 @@ class Parser {
           )
         );
       }
+    } else if (token.matches(TT_KEYWORD, "if")) {
+      const _ifExpr = res.register(this.ifExpr());
+      if (res.hasError()) return res;
+      return res.success(_ifExpr);
     } else {
       return res.failure(
         new InvalidSyntaxError(
@@ -560,7 +650,7 @@ class Parser {
       res.registerAdvancement();
       this.advance();
       const _factor = res.register(this.factor());
-      if (res.error) return res;
+      if (res.hasError()) return res;
       else return res.success(new UnaryOpNode(token, _factor));
     }
 
@@ -648,10 +738,13 @@ class Parser {
     }
 
     const node = res.register(
-      this.binOp(this.compExpr.bind(this), [TT_KEYWORD])
+      this.binOp(this.compExpr.bind(this), [
+        `${TT_KEYWORD}:&&`,
+        `${TT_KEYWORD}:||`,
+      ])
     );
     if (res.hasError())
-      return err.failure(
+      return res.failure(
         new InvalidSyntaxError(
           this.curToken.posStart,
           this.curToken.posEnd,
@@ -661,20 +754,22 @@ class Parser {
     return res.success(node);
   }
 
-  binOp(handle_a, ops, handle_b) {
+  binOp(handle_a, ops, handle_b = null) {
     if (!handle_b) handle_b = handle_a;
 
     const res = new ParseRusult();
     let leftNode = res.register(handle_a()); // number节点
-    if (res.error) return res;
+    if (res.hasError()) return res;
 
-    while (ops.includes(this.curToken.type)) {
-      // 运算符号节点
+    while (
+      ops.includes(this.curToken.type) ||
+      ops.includes(`${this.curToken.type}:${this.curToken.value}`)
+    ) {
       const token = this.curToken;
       res.registerAdvancement();
       this.advance();
       const rightNode = res.register(handle_b()); // number节点
-      if (res.error) return res;
+      if (res.hasError()) return res;
 
       // 递归
       leftNode = new BinOpNode(leftNode, token, rightNode);
@@ -695,7 +790,7 @@ class RTResult {
 
   register(res) {
     if (res instanceof RTResult) {
-      if (res.error) this.error = res.error;
+      if (res.hasError()) this.error = res.error;
       return res.value;
     } else {
       return res;
@@ -836,6 +931,10 @@ class NumberValue {
     return new NumberValue(Number(!this.value)).setContext(this.context);
   }
 
+  isTrue() {
+    return Boolean(this.value);
+  }
+
   toString() {
     return this.value.toString();
   }
@@ -897,9 +996,34 @@ class Interpreter {
       return this.visitVarAccessNode(node, context);
     } else if (node instanceof VarAssignNode) {
       return this.visitVarAssignNode(node, context);
+    } else if (node instanceof IfNode) {
+      return this.visitIfNode(node, context);
     } else {
       // error
     }
+  }
+
+  visitIfNode(node, context) {
+    const res = new RTResult();
+
+    for (const [condition, _expr] of node.cases) {
+      const conditionValue = res.register(this.visit(condition, context));
+      if (res.hasError()) return res;
+
+      if (conditionValue.isTrue()) {
+        const exprValue = res.register(this.visit(_expr, context));
+        if (res.hasError()) return res;
+        return res.success(exprValue);
+      }
+    }
+
+    if (node.elseCase) {
+      const elseValue = res.register(this.visit(node.elseCase, context));
+      if (res.hasError()) return res;
+      return res.success(elseValue);
+    }
+
+    return res.success(null);
   }
 
   // 访问变量
@@ -1029,7 +1153,7 @@ module.exports = function run(fileName, text) {
   // generate AST
   const parser = new Parser(tokens);
   const res = parser.parse();
-  if (res.error) throw res.error;
+  if (res.hasError()) throw res.error;
 
   // run progra
   const interpreter = new Interpreter();
@@ -1037,6 +1161,6 @@ module.exports = function run(fileName, text) {
   context.symbolTable = globalSymbolTable;
   const rtRes = interpreter.visit(res.node, context);
 
-  if (rtRes.error) throw rtRes.error;
+  if (rtRes.hasError()) throw rtRes.error;
   return rtRes.value;
 };
