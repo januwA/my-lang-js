@@ -21,6 +21,8 @@ const TT_LT = "LT"; // <
 const TT_GT = "GT"; // >
 const TT_LTE = "LTE"; // <=
 const TT_GTE = "GTE"; // >=
+const TT_COMMA = "COMMA"; // ,
+const TT_ARROW = "ARROW"; // ->
 const TT_EOF = "EOF";
 const KEYWORDS = [
   "var",
@@ -35,6 +37,7 @@ const KEYWORDS = [
   "to",
   "step",
   "while",
+  "fun",
 ];
 
 class Position {
@@ -208,12 +211,11 @@ class Lexer {
           break;
 
         case "-":
-          tokens.push(new Token(TT_MINUS, null, this.pos));
-          this.advance();
+          tokens.push(this.makeMinusOrArrow());
           break;
 
         case "*":
-          tokens.push(this.makeMultiplication());
+          tokens.push(this.makeMulOrPow());
           break;
 
         case "/":
@@ -231,6 +233,10 @@ class Lexer {
           this.advance();
           break;
 
+        case ",":
+          tokens.push(new Token(TT_COMMA, null, this.pos));
+          this.advance();
+          break;
         case "!":
           tokens.push(this.makeNotEquals());
           break;
@@ -261,7 +267,22 @@ class Lexer {
     return tokens;
   }
 
-  makeMultiplication() {
+  // - or ->
+  makeMinusOrArrow() {
+    const posStart = this.pos.copy();
+    let tokenType = TT_MINUS;
+    this.advance();
+
+    if (this.curChar === ">") {
+      this.advance();
+      tokenType = TT_ARROW;
+    }
+
+    return new Token(tokenType, null, posStart, this.pos);
+  }
+
+  // * or **
+  makeMulOrPow() {
     const posStart = this.pos.copy();
     let tokenType = TT_MUL;
     this.advance();
@@ -468,6 +489,37 @@ class ForNode extends Node {
   }
 }
 
+// 定义函数
+class FuncDefNode extends Node {
+  constructor(varNameToken, argNameTokens, bodyNode) {
+    super({
+      posStart: varNameToken
+        ? varNameToken.posStart
+        : argNameTokens.length
+        ? argNameTokens[0].posStart
+        : bodyNode.posStart,
+      posEnd: bodyNode.posEnd,
+    });
+    this.varNameToken = varNameToken;
+    this.argNameTokens = argNameTokens;
+    this.bodyNode = bodyNode;
+  }
+}
+
+// 调用函数
+class CallNode extends Node {
+  constructor(nodeToCall, argNodes) {
+    super({
+      posStart: nodeToCall.posStart,
+      posEnd: argNodes.length
+        ? argNodes[argNodes.length - 1].posEnd
+        : nodeToCall.posEnd,
+    });
+    this.nodeToCall = nodeToCall;
+    this.argNodes = argNodes;
+  }
+}
+
 class WhileNode extends Node {
   constructor(conditionNode, bodyNode) {
     super({
@@ -532,7 +584,7 @@ class ParseRusult {
 
 /**
  * ## 解析器
- * 解析tokens，并进行语法检查
+ * 解析tokens生成node AST，并进行语法检查
  */
 class Parser {
   constructor(tokens) {
@@ -767,6 +819,169 @@ class Parser {
     return res.success(new WhileNode(conditionNode, bodyNode));
   }
 
+  funDef() {
+    const res = new ParseRusult();
+    if (!this.curToken.matches(TT_KEYWORD, "fun")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'fun'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    let varNameToken = null;
+    if (this.curToken.type === TT_IDENTIFIER) {
+      varNameToken = this.curToken;
+      res.registerAdvancement();
+      this.advance();
+      if (this.curToken.type !== TT_LPAREN) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected '('`
+          )
+        );
+      }
+    } else {
+      if (this.curToken.type !== TT_LPAREN) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected identifier or '('`
+          )
+        );
+      }
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const argNameTokens = [];
+    if (this.curToken.type === TT_IDENTIFIER) {
+      argNameTokens.push(this.curToken);
+      res.registerAdvancement();
+      this.advance();
+
+      while (this.curToken.type === TT_COMMA) {
+        res.registerAdvancement();
+        this.advance();
+
+        if (this.curToken.type !== TT_IDENTIFIER) {
+          return res.failure(
+            new InvalidSyntaxError(
+              this.curToken.posStart,
+              this.curToken.posEnd,
+              `Expected identifier`
+            )
+          );
+        }
+        argNameTokens.push(this.curToken);
+        res.registerAdvancement();
+        this.advance();
+      }
+
+      if (this.curToken.type !== TT_RPAREN) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected ',' or ')'`
+          )
+        );
+      }
+    } else {
+      if (this.curToken.type !== TT_RPAREN) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected identifier or ')'`
+          )
+        );
+      }
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    if (this.curToken.type !== TT_ARROW) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected '->'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const nodeToReturn = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    return res.success(
+      new FuncDefNode(varNameToken, argNameTokens, nodeToReturn)
+    );
+  }
+
+  call() {
+    const res = new ParseRusult();
+    const _atom = res.register(this.atom());
+    if (res.hasError()) return res;
+
+    if (this.curToken.type === TT_LPAREN) {
+      res.registerAdvancement();
+      this.advance();
+
+      const argNodes = [];
+      if (this.curToken.type === TT_RPAREN) {
+        res.registerAdvancement();
+        this.advance();
+      } else {
+        argNodes.push(res.register(this.expr()));
+        if (res.hasError()) {
+          return res.failure(
+            new InvalidSyntaxError(
+              this.curToken.posStart,
+              this.curToken.posEnd,
+              `Expected ')', 'var', 'if', 'for', 'while', 'fun', int, float, identifier, '+', '-', '(' or '!'`
+            )
+          );
+        }
+
+        while (this.curToken.type === TT_COMMA) {
+          res.registerAdvancement();
+          this.advance();
+
+          argNodes.push(res.register(this.expr()));
+          if (res.hasError()) {
+            return res.failure(
+              new InvalidSyntaxError(
+                this.curToken.posStart,
+                this.curToken.posEnd,
+                `Expected ',' or ')'`
+              )
+            );
+          }
+          res.registerAdvancement();
+          this.advance();
+        }
+      }
+
+      return res.success(new CallNode(_atom, argNodes));
+    }
+
+    return res.success(_atom);
+  }
+
   atom() {
     const res = new ParseRusult();
     const token = this.curToken;
@@ -812,19 +1027,23 @@ class Parser {
       const _whileExpr = res.register(this.whileExpr());
       if (res.hasError()) return res;
       return res.success(_whileExpr);
+    } else if (token.matches(TT_KEYWORD, "fun")) {
+      const _funDef = res.register(this.funDef());
+      if (res.hasError()) return res;
+      return res.success(_funDef);
     } else {
       return res.failure(
         new InvalidSyntaxError(
           token.posStart,
           token.posEnd,
-          `Expected int, float, identifier, '+', '-' or '('`
+          `Expected int, float, identifier, '+', '-', '(', 'if', 'for', 'while', 'fun'`
         )
       );
     }
   }
 
   power() {
-    return this.binOp(this.atom.bind(this), [TT_POW], this.factor.bind(this));
+    return this.binOp(this.call.bind(this), [TT_POW], this.factor.bind(this));
   }
 
   factor() {
@@ -934,7 +1153,7 @@ class Parser {
         new InvalidSyntaxError(
           this.curToken.posStart,
           this.curToken.posEnd,
-          `Expected 'var', int, float, identifier, '+', '-' or '('`
+          `Expected 'var', 'if', 'for', 'while', 'fun', int, float, identifier, '+', '-' or '('`
         )
       );
     return res.success(node);
@@ -994,9 +1213,8 @@ class RTResult {
   }
 }
 
-class NumberValue {
-  constructor(value) {
-    this.value = value;
+class Value {
+  constructor() {
     this.setPos();
     this.setContext();
   }
@@ -1012,20 +1230,110 @@ class NumberValue {
     return this;
   }
 
+  illegalOperation(other = null) {
+    if (!other) other = this;
+    return new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  add(other) {
+    return this.illegalOperation(other);
+  }
+
+  sub(other) {
+    return this.illegalOperation(other);
+  }
+
+  mul(other) {
+    return this.illegalOperation(other);
+  }
+  div(other) {
+    return this.illegalOperation(other);
+  }
+
+  pow(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpEq(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpNe(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpLt(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpGt(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpLte(other) {
+    return this.illegalOperation(other);
+  }
+
+  cmpGte(other) {
+    return this.illegalOperation(other);
+  }
+
+  and(other) {
+    return this.illegalOperation(other);
+  }
+
+  or(other) {
+    return this.illegalOperation(other);
+  }
+
+  not() {
+    return this.illegalOperation(other);
+  }
+
+  execute(args) {
+    return new RTResult().failure(this.illegalOperation());
+  }
+
+  copy() {
+    throw "No copy method defined";
+  }
+
+  isTrue() {
+    return false;
+  }
+}
+
+class NumberValue extends Value {
+  constructor(value) {
+    super();
+    this.value = value;
+  }
+
   add(other) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value + other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
     }
   }
 
   sub(other) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value - other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
     }
   }
   mul(other) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value * other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
     }
   }
   div(other) {
@@ -1039,6 +1347,8 @@ class NumberValue {
         );
       }
       return new NumberValue(this.value / other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
     }
   }
   pow(other) {
@@ -1046,6 +1356,8 @@ class NumberValue {
       return new NumberValue(this.value ** other.value).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1054,6 +1366,8 @@ class NumberValue {
       return new NumberValue(Number(this.value === other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1062,6 +1376,8 @@ class NumberValue {
       return new NumberValue(Number(this.value !== other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1070,6 +1386,8 @@ class NumberValue {
       return new NumberValue(Number(this.value < other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1078,6 +1396,8 @@ class NumberValue {
       return new NumberValue(Number(this.value > other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1086,6 +1406,8 @@ class NumberValue {
       return new NumberValue(Number(this.value <= other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1094,6 +1416,8 @@ class NumberValue {
       return new NumberValue(Number(this.value >= other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1102,6 +1426,8 @@ class NumberValue {
       return new NumberValue(Number(this.value && other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1110,6 +1436,8 @@ class NumberValue {
       return new NumberValue(Number(this.value || other.value)).setContext(
         this.context
       );
+    } else {
+      this.illegalOperation(other);
     }
   }
 
@@ -1121,15 +1449,77 @@ class NumberValue {
     return Boolean(this.value);
   }
 
-  toString() {
-    return this.value.toString();
-  }
-
   copy() {
     const result = new NumberValue(this.value);
     result.setPos(this.posStart, this.posEnd);
     result.setContext(this.context);
     return result;
+  }
+
+  toString() {
+    return this.value.toString();
+  }
+}
+
+class FunctionValue extends Value {
+  constructor(name, bodyNode, argNames) {
+    super();
+    this.name = name || "<anonymous>";
+    this.bodyNode = bodyNode;
+    this.argNames = argNames;
+  }
+
+  exceute(args) {
+    const res = new RTResult();
+
+    // 每次函数运行都是新的上下文
+    const interpreter = new Interpreter();
+    const newContext = new Context(this.name, this.context, this.posStart);
+    newContext.symbolTable = new SymbolTable(this.context.symbolTable);
+
+    if (args.length > this.argNames.length) {
+      return res.failure(
+        new RTError(
+          this.posStart,
+          this.posEnd,
+          `${args.length} - ${this.argNames.length} too many args passed into '${this.name}'`,
+          self.context
+        )
+      );
+    }
+
+    if (args.length < this.argNames.length) {
+      return res.failure(
+        new RTError(
+          this.posStart,
+          this.posEnd,
+          `${args.length} - ${this.argNames.length} too few args passed into '${this.name}'`,
+          self.context
+        )
+      );
+    }
+
+    for (let i = 0; i < args.length; i++) {
+      const argName = this.argNames[i];
+      const argValue = args[i];
+      argValue.setContext(newContext);
+      newContext.symbolTable.set(argName, argValue);
+    }
+
+    const value = res.register(interpreter.visit(this.bodyNode, newContext));
+    if (res.hasError()) return res;
+    return res.success(value);
+  }
+
+  copy() {
+    const result = new FunctionValue(this.name, this.bodyNode, this.argNames);
+    result.setContext(this.context);
+    result.setPos(this.posStart, this.posEnd);
+    return result;
+  }
+
+  toString() {
+    return `ƒ ${this.name}(${this.argNames.join(",")}){}`;
   }
 }
 
@@ -1145,9 +1535,9 @@ class Context {
 
 // 储存所有变量
 class SymbolTable {
-  constructor() {
+  constructor(parent = null) {
     this.symbols = {};
-    this.parent = null; // parent context symbol table
+    this.parent = parent; // parent context symbol table
   }
 
   get(name) {
@@ -1192,9 +1582,48 @@ class Interpreter {
       return this.visitForNode(node, context);
     } else if (node instanceof WhileNode) {
       return this.visitWhileNode(node, context);
+    } else if (node instanceof FuncDefNode) {
+      return this.visitFuncDefNode(node, context);
+    } else if (node instanceof CallNode) {
+      return this.visitCallNode(node, context);
     } else {
       // error
     }
+  }
+
+  // 函数定义
+  visitFuncDefNode(node, context) {
+    const res = new RTResult();
+    const funcName = node.varNameToken ? node.varNameToken.value : null;
+    const bodyNode = node.bodyNode;
+    const argNames = node.argNameTokens.map((t) => t.value);
+    const funcValue = new FunctionValue(funcName, bodyNode, argNames);
+    funcValue.setContext(context);
+    funcValue.setPos(node.posStart, node.posEnd);
+
+    if (node.varNameToken) {
+      context.symbolTable.set(funcName, funcValue);
+    }
+
+    return res.success(funcValue);
+  }
+
+  // 调用函数
+  visitCallNode(node, context) {
+    const res = new RTResult();
+    const args = [];
+    let valueToCall = res.register(this.visit(node.nodeToCall, context));
+    if (res.hasError()) return res;
+    valueToCall = valueToCall.copy().setPos(node.posStart, node.posEnd);
+
+    for (const argNode of node.argNodes) {
+      args.push(res.register(this.visit(argNode, context)));
+      if (res.hasError()) return res;
+    }
+
+    const returnValue = res.register(valueToCall.exceute(args));
+    if (res.hasError()) return res;
+    return res.success(returnValue);
   }
 
   visitWhileNode(node, context) {

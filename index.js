@@ -7,7 +7,7 @@ const rl = readline.createInterface({
 });
 
 const waitForUserInput = function () {
-  rl.question("", (text) => {
+  rl.question("basic> ", (text) => {
     try {
       const result = basic("<stdin>", text);
       if (result) console.log(result.value);
