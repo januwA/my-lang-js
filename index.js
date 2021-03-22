@@ -9,8 +9,8 @@ const rl = readline.createInterface({
 const waitForUserInput = function () {
   rl.question("", (text) => {
     try {
-      const rtRes = basic("<stdin>", text);
-      console.log(rtRes.value);
+      const result = basic("<stdin>", text);
+      if (result) console.log(result.value);
     } catch (error) {
       console.log(error.toString());
     }
@@ -21,3 +21,5 @@ const waitForUserInput = function () {
 waitForUserInput();
 
 // basic("<stdin>", "if 1==1 then 2");
+
+// basic("<stdin>", `var n = 1 for i = 0 to 10 then var n = n + i`);

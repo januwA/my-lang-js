@@ -22,7 +22,20 @@ const TT_GT = "GT"; // >
 const TT_LTE = "LTE"; // <=
 const TT_GTE = "GTE"; // >=
 const TT_EOF = "EOF";
-const KEYWORDS = ["var", "&&", "||", "!", "if", "then", "elif", "else"];
+const KEYWORDS = [
+  "var",
+  "&&",
+  "||",
+  "!",
+  "if",
+  "then",
+  "elif",
+  "else",
+  "for",
+  "to",
+  "step",
+  "while",
+];
 
 class Position {
   constructor(index, row, col, fileName, fileText) {
@@ -147,8 +160,8 @@ class Token {
 }
 
 /**
- * ## 词法分析器
- * 只做词法分析和检测错误的符号
+ * 词法分析器
+ * 只做词法分析和检测错误的符号,生成tokens
  * 不做语法检查
  */
 class Lexer {
@@ -186,6 +199,7 @@ class Lexer {
       switch (this.curChar) {
         case " ":
         case "\t":
+        case "\n":
           this.advance();
           break;
         case "+":
@@ -369,47 +383,59 @@ class Lexer {
   }
 }
 
-class Node {}
+class Node {
+  constructor(opt) {
+    this.posStart = opt.posStart;
+    this.posEnd = opt.posEnd;
+  }
+}
 
 // 数字节点
 class NumberNode extends Node {
   constructor(token) {
-    super();
+    super({
+      posStart: token.posStart,
+      posEnd: token.posEnd,
+    });
     this.token = token;
-    this.posStart = token.posStart;
-    this.posEnd = token.posEnd;
   }
 
   toString() {
     return this.token.toString();
   }
 }
+
+// 使用变量
 class VarAccessNode extends Node {
   constructor(varNameToken) {
-    super();
+    super({
+      posStart: varNameToken.posStart,
+      posEnd: varNameToken.posEnd,
+    });
     this.varNameToken = varNameToken;
-    this.posStart = varNameToken.posStart;
-    this.posEnd = varNameToken.posEnd;
   }
 }
+
+// 分配变量
 class VarAssignNode extends Node {
   constructor(varNameToken, valueNode) {
-    super();
+    super({
+      posStart: varNameToken.posStart,
+      posEnd: valueNode.posEnd,
+    });
     this.varNameToken = varNameToken;
     this.valueNode = valueNode;
-    this.posStart = varNameToken.posStart;
-    this.posEnd = valueNode.posEnd;
   }
 }
 
 class UnaryOpNode extends Node {
   constructor(token, node) {
-    super();
+    super({
+      posStart: token.posStart,
+      posEnd: node.posEnd,
+    });
     this.token = token;
     this.node = node;
-
-    this.posStart = token.posStart;
-    this.posEnd = node.posEnd;
   }
 
   toString() {
@@ -419,26 +445,50 @@ class UnaryOpNode extends Node {
 
 class IfNode extends Node {
   constructor(cases, elseCase) {
-    super();
+    super({
+      posStart: ases[0][0].posStart,
+      posEnd: elseCase ? elseCase.posEnd : cases[cases.length - 1][0].posEnd,
+    });
     this.cases = cases;
     this.elseCase = elseCase;
-    this.posStart = cases[0][0].posStart;
-    this.posEnd = elseCase
-      ? elseCase.posEnd
-      : cases[cases.length - 1][0].posEnd;
+  }
+}
+
+class ForNode extends Node {
+  constructor(varNameToken, startNode, endNode, stepNode, bodyNode) {
+    super({
+      posStart: varNameToken.posStart,
+      posEnd: bodyNode.posEnd,
+    });
+    this.varNameToken = varNameToken;
+    this.startNode = startNode;
+    this.endNode = endNode;
+    this.stepNode = stepNode;
+    this.bodyNode = bodyNode;
+  }
+}
+
+class WhileNode extends Node {
+  constructor(conditionNode, bodyNode) {
+    super({
+      posStart: conditionNode.posStart,
+      posEnd: bodyNode.posEnd,
+    });
+    this.conditionNode = conditionNode;
+    this.bodyNode = bodyNode;
   }
 }
 
 // 运算节点
 class BinOpNode extends Node {
   constructor(leftNode, token, rightNode) {
-    super();
+    super({
+      posStart: leftNode.posStart,
+      posEnd: rightNode.posEnd,
+    });
     this.leftNode = leftNode;
     this.token = token;
     this.rightNode = rightNode;
-
-    this.posStart = leftNode.posStart;
-    this.posEnd = rightNode.posEnd;
   }
 
   toString() {
@@ -482,7 +532,7 @@ class ParseRusult {
 
 /**
  * ## 解析器
- * 解析Lexer，并进行语法检查
+ * 解析tokens，并进行语法检查
  */
 class Parser {
   constructor(tokens) {
@@ -503,7 +553,7 @@ class Parser {
 
   parse() {
     const res = this.expr();
-    if (!res.error && this.curToken.type !== TT_EOF) {
+    if (!res.hasError() && this.curToken.type !== TT_EOF) {
       return res.failure(
         new InvalidSyntaxError(
           this.curToken.posStart,
@@ -589,6 +639,134 @@ class Parser {
     return res.success(new IfNode(cases, elseCase));
   }
 
+  forExpr() {
+    const res = new ParseRusult();
+
+    if (!this.curToken.matches(TT_KEYWORD, "for")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'for'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    if (this.curToken.type !== TT_IDENTIFIER) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected identifier`
+        )
+      );
+    }
+
+    const varNameToken = this.curToken;
+    res.registerAdvancement();
+    this.advance();
+
+    if (this.curToken.type !== TT_EQ) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected '='`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const startNode = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    if (!this.curToken.matches(TT_KEYWORD, "to")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'to'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const endNode = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    let stepNode = null;
+    if (this.curToken.matches(TT_KEYWORD, "step")) {
+      res.registerAdvancement();
+      this.advance();
+      stepNode = res.register(this.expr());
+      if (res.hasError()) return res;
+    }
+
+    if (!this.curToken.matches(TT_KEYWORD, "then")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'then'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const bodyNode = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    return res.success(
+      new ForNode(varNameToken, startNode, endNode, stepNode, bodyNode)
+    );
+  }
+
+  whileExpr() {
+    const res = new ParseRusult();
+    if (!this.curToken.matches(TT_KEYWORD, "while")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'while'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const conditionNode = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    if (!this.curToken.matches(TT_KEYWORD, "then")) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected 'then'`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    const bodyNode = res.register(this.expr());
+    if (res.hasError()) return res;
+
+    return res.success(new WhileNode(conditionNode, bodyNode));
+  }
+
   atom() {
     const res = new ParseRusult();
     const token = this.curToken;
@@ -626,6 +804,14 @@ class Parser {
       const _ifExpr = res.register(this.ifExpr());
       if (res.hasError()) return res;
       return res.success(_ifExpr);
+    } else if (token.matches(TT_KEYWORD, "for")) {
+      const _forExpr = res.register(this.forExpr());
+      if (res.hasError()) return res;
+      return res.success(_forExpr);
+    } else if (token.matches(TT_KEYWORD, "while")) {
+      const _whileExpr = res.register(this.whileExpr());
+      if (res.hasError()) return res;
+      return res.success(_whileExpr);
     } else {
       return res.failure(
         new InvalidSyntaxError(
@@ -981,10 +1167,14 @@ class SymbolTable {
   }
 }
 
-// 解释器,解释Parser
+/**
+ * 解释器
+ * 解释Parser输出的AST
+ */
 class Interpreter {
   constructor() {}
 
+  // 解析node AST
   visit(node, context) {
     if (node instanceof NumberNode) {
       return this.visitNumberNode(node, context);
@@ -998,9 +1188,60 @@ class Interpreter {
       return this.visitVarAssignNode(node, context);
     } else if (node instanceof IfNode) {
       return this.visitIfNode(node, context);
+    } else if (node instanceof ForNode) {
+      return this.visitForNode(node, context);
+    } else if (node instanceof WhileNode) {
+      return this.visitWhileNode(node, context);
     } else {
       // error
     }
+  }
+
+  visitWhileNode(node, context) {
+    const res = new RTResult();
+    while (true) {
+      const condition = res.register(this.visit(node.conditionNode, context));
+      if (res.hasError()) return res;
+      if (!condition.isTrue()) break;
+
+      res.register(this.visit(node.bodyNode, context));
+      if (res.hasError()) return res;
+    }
+
+    return res.success(null);
+  }
+
+  visitForNode(node, context) {
+    const res = new RTResult();
+    const startValue = res.register(this.visit(node.startNode, context));
+    if (res.hasError()) return res;
+
+    const endValue = res.register(this.visit(node.endNode, context));
+    if (res.hasError()) return res;
+
+    let stepValue = new NumberValue(1);
+    if (node.stepNode) {
+      stepValue = res.register(this.visit(node.stepNode, context));
+      if (res.hasError()) return res;
+    }
+
+    let i = startValue.value;
+    let condition = null;
+    if (stepValue.value >= 0) {
+      condition = () => i < endValue.value;
+    } else {
+      condition = () => i > endValue.value;
+    }
+
+    while (condition()) {
+      context.symbolTable.set(node.varNameToken.value, new NumberValue(i));
+      i += stepValue.value;
+
+      res.register(this.visit(node.bodyNode, context));
+      if (res.hasError()) return res;
+    }
+
+    return res.success(null);
   }
 
   visitIfNode(node, context) {
