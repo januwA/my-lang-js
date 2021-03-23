@@ -10,7 +10,7 @@ const waitForUserInput = function () {
   rl.question("basic> ", (text) => {
     try {
       const result = basic("<stdin>", text);
-      if (result) console.log(result.value);
+      if (result) console.log(result.toString());
     } catch (error) {
       console.log(error.toString());
     }

@@ -5,6 +5,7 @@ const LETTERS = /[^a-zA-Z0-9_]/;
 
 const TT_INT = "INT";
 const TT_FLOAT = "FLOAT";
+const TT_STRING = "STRING";
 const TT_IDENTIFIER = "IDENTIFIER";
 const TT_KEYWORD = "KEYWORD";
 const TT_PLUS = "PLUS"; // +
@@ -255,6 +256,9 @@ class Lexer {
         case "|":
           tokens.push(this.makeOr());
           break;
+        case '"':
+          tokens.push(this.makeString());
+          break;
         default:
           const posStart = this.pos.copy();
           const c = this.curChar;
@@ -265,6 +269,34 @@ class Lexer {
 
     tokens.push(new Token(TT_EOF, null, this.pos));
     return tokens;
+  }
+
+  makeString() {
+    let str = "";
+    const posStart = this.pos.copy();
+    let escapeCharacter = false;
+    this.advance();
+
+    const escapeCaracters = {
+      n: "\n",
+      t: "\t",
+    };
+
+    while (this.curChar !== null && (this.curChar !== '"' || escapeCharacter)) {
+      if (escapeCharacter) {
+        str += escapeCaracters[this.curChar] || this.curChar;
+      } else {
+        if (this.curChar === "\\") {
+          escapeCharacter = true;
+        } else {
+          str += this.curChar;
+        }
+      }
+      this.advance();
+    }
+
+    this.advance();
+    return new Token(TT_STRING, str, posStart, this.pos);
   }
 
   // - or ->
@@ -413,6 +445,20 @@ class Node {
 
 // 数字节点
 class NumberNode extends Node {
+  constructor(token) {
+    super({
+      posStart: token.posStart,
+      posEnd: token.posEnd,
+    });
+    this.token = token;
+  }
+
+  toString() {
+    return this.token.toString();
+  }
+}
+
+class StringNode extends Node {
   constructor(token) {
     super({
       posStart: token.posStart,
@@ -991,6 +1037,11 @@ class Parser {
       res.registerAdvancement();
       this.advance();
       return res.success(new NumberNode(token));
+    } else if (token.type === TT_STRING) {
+      // "string"
+      res.registerAdvancement();
+      this.advance();
+      return res.success(new StringNode(token));
     } else if (token.type === TT_IDENTIFIER) {
       // a + b
       res.registerAdvancement();
@@ -1308,6 +1359,142 @@ class Value {
   }
 }
 
+class StringValue extends Value {
+  constructor(value) {
+    super();
+    this.value = value;
+  }
+
+  add(other) {
+    if (other instanceof StringValue) {
+      return new StringValue(this.value + other.value).setContext(this.context);
+    } else if (other instanceof NumberValue) {
+      return new StringValue(this.value + other.value.toString()).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  mul(other) {
+    if (other instanceof NumberValue) {
+      return new StringValue(this.value.repeat(other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpEq(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value === other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpNe(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value !== other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpLt(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value < other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpGt(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value > other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpLte(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value <= other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  cmpGte(other) {
+    if (other instanceof NumberValue || other instanceof StringValue) {
+      return new NumberValue(Number(this.value >= other.value)).setContext(
+        this.context
+      );
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  and(other) {
+    if (other instanceof StringValue) {
+      return new StringValue(
+        this.isTrue() ? other.value : this.value
+      ).setContext(this.context);
+    } else if (other instanceof NumberValue) {
+      if (!this.isTrue())
+        return new StringValue(this.value).setContext(this.context);
+      else return new NumberValue(other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  or(other) {
+    if (other instanceof StringValue) {
+      return new StringValue(
+        this.isTrue() ? this.value : other.value
+      ).setContext(this.context);
+    } else if (other instanceof NumberValue) {
+      if (this.isTrue())
+        return new StringValue(this.value).setContext(this.context);
+      else return new NumberValue(other.value).setContext(this.context);
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  not() {
+    return new NumberValue(Number(!this.value)).setContext(this.context);
+  }
+
+  isTrue() {
+    return Boolean(this.value.length);
+  }
+
+  copy() {
+    const result = new StringValue(this.value);
+    result.setPos(this.posStart, this.posEnd);
+    result.setContext(this.context);
+    return result;
+  }
+
+  toString() {
+    return `"${this.value}"`;
+  }
+}
+
 class NumberValue extends Value {
   constructor(value) {
     super();
@@ -1568,6 +1755,8 @@ class Interpreter {
   visit(node, context) {
     if (node instanceof NumberNode) {
       return this.visitNumberNode(node, context);
+    } else if (node instanceof StringNode) {
+      return this.visitStringNode(node, context);
     } else if (node instanceof BinOpNode) {
       return this.visitBinOpNode(node, context);
     } else if (node instanceof UnaryOpNode) {
@@ -1589,6 +1778,15 @@ class Interpreter {
     } else {
       // error
     }
+  }
+
+  visitStringNode(node, context) {
+    const res = new RTResult();
+    return res.success(
+      new StringValue(node.token.value)
+        .setContext(context)
+        .setPos(node.posStart, node.posEnd)
+    );
   }
 
   // 函数定义
