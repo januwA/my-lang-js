@@ -1,4 +1,4 @@
-const stringsWithArrows = require("./strings-with-arrows");
+import { Position } from "./Position";
 
 const DIGITS = /[^0-9\.]/;
 const LETTERS = /[^a-zA-Z0-9_]/;
@@ -43,42 +43,26 @@ const KEYWORDS = [
   "fun",
 ];
 
-class Position {
-  constructor(index, row, col, fileName, fileText) {
-    this.index = index;
-    this.row = row;
-    this.col = col;
-    this.fileName = fileName;
-    this.fileText = fileText;
-  }
-
-  advance(char) {
-    this.index++;
-    this.col++;
-    if (char === "\n") {
-      this.col = 0;
-      this.row++;
-    }
-  }
-
-  copy() {
-    return new Position(
-      this.index,
-      this.row,
-      this.col,
-      this.fileName,
-      this.fileText
-    );
-  }
+function stringsWithArrows(
+  text: string,
+  posStart: Position,
+  posEnd: Position
+): string {
+  let result = "";
+  const lines = text.split("\n");
+  result += lines[posStart.row];
+  result += "\n";
+  result += " ".padStart(posStart.col) + `^`.repeat(posEnd.col - posStart.col);
+  return result;
 }
 
-class Error {
-  constructor(name, posStart, posEnd, message) {
-    this.posStart = posStart;
-    this.posEnd = posEnd;
-    this.name = name;
-    this.message = message;
-  }
+class BasicError {
+  constructor(
+    public name: string,
+    public posStart: Position,
+    public posEnd: Position,
+    public message: string
+  ) {}
 
   toString() {
     let err = `${this.name}: '${this.message}'\n`;
@@ -93,22 +77,26 @@ class Error {
   }
 }
 
-class IllegalCharError extends Error {
-  constructor(posStart, posEnd, message) {
+class IllegalCharError extends BasicError {
+  constructor(posStart: Position, posEnd: Position, message: string) {
     super("Illegal CharError", posStart, posEnd, message);
   }
 }
 
-class InvalidSyntaxError extends Error {
-  constructor(posStart, posEnd, message) {
+class InvalidSyntaxError extends BasicError {
+  constructor(posStart: Position, posEnd: Position, message: string) {
     super("Invalid Syntax", posStart, posEnd, message);
   }
 }
 
-class RTError extends Error {
-  constructor(posStart, posEnd, message, context) {
+class RTError extends BasicError {
+  constructor(
+    posStart: Position,
+    posEnd: Position,
+    message: string,
+    public context: BasicContext
+  ) {
     super("Runtime Error", posStart, posEnd, message);
-    this.context = context;
   }
 
   toString() {
@@ -140,13 +128,16 @@ class RTError extends Error {
 }
 
 class Token {
-  constructor(type, value, posStart, posEnd) {
-    this.type = type;
-    this.value = value;
+  constructor(
+    public type: string,
+    public value?: string,
+    public posStart?: Position,
+    public posEnd?: Position
+  ) {
     if (posStart) {
       this.posStart = posStart.copy();
       this.posEnd = posStart.copy();
-      this.posEnd.advance();
+      this.posEnd!.advance("");
     }
 
     if (posEnd) {
@@ -154,7 +145,7 @@ class Token {
     }
   }
 
-  matches(type, value) {
+  matches(type: string, value: string) {
     return this.type == type && this.value == value;
   }
 
@@ -171,11 +162,10 @@ class Token {
  * 不做语法检查
  */
 class Lexer {
-  constructor(fileName, text) {
-    this.fileName = fileName;
-    this.text = text;
-    this.pos = new Position(-1, 0, -1, fileName, text);
-    this.curChar = null;
+  pos = new Position(-1, 0, -1, this.fileName, this.text);
+  curChar?: string = null;
+
+  constructor(public fileName: string, public text: string) {
     this.advance();
   }
 
@@ -189,7 +179,7 @@ class Lexer {
   }
 
   makeTokens() {
-    const tokens = [];
+    const tokens: Token[] = [];
 
     while (this.curChar !== null) {
       if (!DIGITS.test(this.curChar)) {
@@ -356,8 +346,8 @@ class Lexer {
       this.advance();
     }
 
-    if (isDot) return new Token(TT_FLOAT, Number(numStr), posStart, this.pos);
-    else return new Token(TT_INT, Number(numStr), posStart, this.pos);
+    if (isDot) return new Token(TT_FLOAT, numStr, posStart, this.pos);
+    else return new Token(TT_INT, numStr, posStart, this.pos);
   }
 
   makeIdentifier() {
@@ -448,21 +438,14 @@ class Lexer {
   }
 }
 
-class Node {
-  constructor(opt) {
-    this.posStart = opt.posStart;
-    this.posEnd = opt.posEnd;
-  }
+class BasicNode {
+  constructor(public posStart: Position, public posEnd: Position) {}
 }
 
 // 数字节点
-class NumberNode extends Node {
-  constructor(token) {
-    super({
-      posStart: token.posStart,
-      posEnd: token.posEnd,
-    });
-    this.token = token;
+class NumberNode extends BasicNode {
+  constructor(public token: Token) {
+    super(token.posStart, token.posEnd);
   }
 
   toString() {
@@ -470,13 +453,9 @@ class NumberNode extends Node {
   }
 }
 
-class StringNode extends Node {
-  constructor(token) {
-    super({
-      posStart: token.posStart,
-      posEnd: token.posEnd,
-    });
-    this.token = token;
+class StringNode extends BasicNode {
+  constructor(public token: Token) {
+    super(token.posStart, token.posEnd);
   }
 
   toString() {
@@ -484,47 +463,33 @@ class StringNode extends Node {
   }
 }
 
-class ListNode extends Node {
-  constructor(elementNodes, posStart, posEnd) {
-    super({
-      posStart: posStart,
-      posEnd: posEnd,
-    });
-    this.elementNodes = elementNodes;
+class ListNode extends BasicNode {
+  constructor(
+    public elementNodes: BasicNode[],
+    posStart: Position,
+    posEnd: Position
+  ) {
+    super(posStart, posEnd);
   }
 }
 
 // 使用变量
-class VarAccessNode extends Node {
-  constructor(varNameToken) {
-    super({
-      posStart: varNameToken.posStart,
-      posEnd: varNameToken.posEnd,
-    });
-    this.varNameToken = varNameToken;
+class VarAccessNode extends BasicNode {
+  constructor(public varNameToken: Token) {
+    super(varNameToken.posStart, varNameToken.posEnd);
   }
 }
 
 // 分配变量
-class VarAssignNode extends Node {
-  constructor(varNameToken, valueNode) {
-    super({
-      posStart: varNameToken.posStart,
-      posEnd: valueNode.posEnd,
-    });
-    this.varNameToken = varNameToken;
-    this.valueNode = valueNode;
+class VarAssignNode extends BasicNode {
+  constructor(public varNameToken: Token, public valueNode: BasicNode) {
+    super(varNameToken.posStart, valueNode.posEnd);
   }
 }
 
-class UnaryOpNode extends Node {
-  constructor(token, node) {
-    super({
-      posStart: token.posStart,
-      posEnd: node.posEnd,
-    });
-    this.token = token;
-    this.node = node;
+class UnaryOpNode extends BasicNode {
+  constructor(public token: Token, public node: BasicNode) {
+    super(token.posStart, node.posEnd);
   }
 
   toString() {
@@ -532,83 +497,69 @@ class UnaryOpNode extends Node {
   }
 }
 
-class IfNode extends Node {
-  constructor(cases, elseCase) {
-    super({
-      posStart: ases[0][0].posStart,
-      posEnd: elseCase ? elseCase.posEnd : cases[cases.length - 1][0].posEnd,
-    });
-    this.cases = cases;
-    this.elseCase = elseCase;
+class IfNode extends BasicNode {
+  constructor(public cases: Array<BasicNode>[], public elseCase: BasicNode) {
+    super(
+      cases[0][0].posStart,
+      elseCase ? elseCase.posEnd : cases[cases.length - 1][0].posEnd
+    );
   }
 }
 
-class ForNode extends Node {
-  constructor(varNameToken, startNode, endNode, stepNode, bodyNode) {
-    super({
-      posStart: varNameToken.posStart,
-      posEnd: bodyNode.posEnd,
-    });
-    this.varNameToken = varNameToken;
-    this.startNode = startNode;
-    this.endNode = endNode;
-    this.stepNode = stepNode;
-    this.bodyNode = bodyNode;
+class ForNode extends BasicNode {
+  constructor(
+    public varNameToken: Token,
+    public startNode: BasicNode,
+    public endNode: BasicNode,
+    public stepNode: BasicNode,
+    public bodyNode: BasicNode
+  ) {
+    super(varNameToken.posStart, bodyNode.posEnd);
   }
 }
 
 // 定义函数
-class FuncDefNode extends Node {
-  constructor(varNameToken, argNameTokens, bodyNode) {
-    super({
-      posStart: varNameToken
+class FuncDefNode extends BasicNode {
+  constructor(
+    public varNameToken: Token,
+    public argNameTokens: Token[],
+    public bodyNode: BasicNode
+  ) {
+    super(
+      varNameToken
         ? varNameToken.posStart
         : argNameTokens.length
         ? argNameTokens[0].posStart
         : bodyNode.posStart,
-      posEnd: bodyNode.posEnd,
-    });
-    this.varNameToken = varNameToken;
-    this.argNameTokens = argNameTokens;
-    this.bodyNode = bodyNode;
+      bodyNode.posEnd
+    );
   }
 }
 
 // 调用函数
-class CallNode extends Node {
-  constructor(nodeToCall, argNodes) {
-    super({
-      posStart: nodeToCall.posStart,
-      posEnd: argNodes.length
-        ? argNodes[argNodes.length - 1].posEnd
-        : nodeToCall.posEnd,
-    });
-    this.nodeToCall = nodeToCall;
-    this.argNodes = argNodes;
+class CallNode extends BasicNode {
+  constructor(public nodeToCall: BasicNode, public argNodes: any[]) {
+    super(
+      nodeToCall.posStart,
+      argNodes.length ? argNodes[argNodes.length - 1].posEnd : nodeToCall.posEnd
+    );
   }
 }
 
-class WhileNode extends Node {
-  constructor(conditionNode, bodyNode) {
-    super({
-      posStart: conditionNode.posStart,
-      posEnd: bodyNode.posEnd,
-    });
-    this.conditionNode = conditionNode;
-    this.bodyNode = bodyNode;
+class WhileNode extends BasicNode {
+  constructor(public conditionNode: BasicNode, public bodyNode: BasicNode) {
+    super(conditionNode.posStart, bodyNode.posEnd);
   }
 }
 
 // 运算节点
-class BinOpNode extends Node {
-  constructor(leftNode, token, rightNode) {
-    super({
-      posStart: leftNode.posStart,
-      posEnd: rightNode.posEnd,
-    });
-    this.leftNode = leftNode;
-    this.token = token;
-    this.rightNode = rightNode;
+class BinOpNode extends BasicNode {
+  constructor(
+    public leftNode: BasicNode,
+    public token: Token,
+    public rightNode: BasicNode
+  ) {
+    super(leftNode.posStart, rightNode.posEnd);
   }
 
   toString() {
@@ -617,11 +568,9 @@ class BinOpNode extends Node {
 }
 
 class ParseRusult {
-  constructor() {
-    this.error = null;
-    this.node = null;
-    this.advanceCount = 0;
-  }
+  error?: BasicError = null;
+  node?: BasicNode = null;
+  advanceCount: number = 0;
 
   hasError() {
     return !!this.error;
@@ -631,18 +580,18 @@ class ParseRusult {
     this.advanceCount++;
   }
 
-  register(res) {
+  register(res: ParseRusult) {
     this.advanceCount += res.advanceCount;
     if (res.hasError()) this.error = res.error;
     return res.node;
   }
 
-  success(node) {
+  success(node: BasicNode) {
     this.node = node;
     return this;
   }
 
-  failure(error) {
+  failure(error: BasicError) {
     if (!this.hasError() || this.advanceCount === 0) {
       this.error = error;
     }
@@ -655,10 +604,9 @@ class ParseRusult {
  * 解析tokens生成node AST，并进行语法检查
  */
 class Parser {
-  constructor(tokens) {
-    this.tokens = tokens;
-    this.index = -1;
-    this.curToken = null;
+  index: number = -1;
+  curToken?: Token = null;
+  constructor(public tokens: Token[]) {
     this.advance();
   }
 
@@ -689,15 +637,6 @@ class Parser {
     const res = new ParseRusult();
     const elementNodes = [];
     const posStart = this.curToken.posStart.copy();
-    if (this.curToken.type !== TT_LSQUARE) {
-      return res.failure(
-        new InvalidSyntaxError(
-          this.curToken.posStart,
-          this.curToken.posEnd,
-          `Expected '['`
-        )
-      );
-    }
 
     res.registerAdvancement();
     this.advance();
@@ -746,7 +685,7 @@ class Parser {
 
   ifExpr() {
     const res = new ParseRusult();
-    const cases = [];
+    const cases: Array<BasicNode>[] = [];
     let elseCase = null;
 
     if (!this.curToken.matches(TT_KEYWORD, "if")) {
@@ -848,7 +787,7 @@ class Parser {
     res.registerAdvancement();
     this.advance();
 
-    if (this.curToken.type !== TT_EQ) {
+    if ((this.curToken as Token).type !== TT_EQ) {
       return res.failure(
         new InvalidSyntaxError(
           this.curToken.posStart,
@@ -966,7 +905,7 @@ class Parser {
       varNameToken = this.curToken;
       res.registerAdvancement();
       this.advance();
-      if (this.curToken.type !== TT_LPAREN) {
+      if ((this.curToken as Token).type !== TT_LPAREN) {
         return res.failure(
           new InvalidSyntaxError(
             this.curToken.posStart,
@@ -996,7 +935,7 @@ class Parser {
       res.registerAdvancement();
       this.advance();
 
-      while (this.curToken.type === TT_COMMA) {
+      while ((this.curToken as Token).type === TT_COMMA) {
         res.registerAdvancement();
         this.advance();
 
@@ -1014,7 +953,7 @@ class Parser {
         this.advance();
       }
 
-      if (this.curToken.type !== TT_RPAREN) {
+      if ((this.curToken as Token).type !== TT_RPAREN) {
         return res.failure(
           new InvalidSyntaxError(
             this.curToken.posStart,
@@ -1024,7 +963,7 @@ class Parser {
         );
       }
     } else {
-      if (this.curToken.type !== TT_RPAREN) {
+      if ((this.curToken as Token).type !== TT_RPAREN) {
         return res.failure(
           new InvalidSyntaxError(
             this.curToken.posStart,
@@ -1038,7 +977,7 @@ class Parser {
     res.registerAdvancement();
     this.advance();
 
-    if (this.curToken.type !== TT_ARROW) {
+    if ((this.curToken as Token).type !== TT_ARROW) {
       return res.failure(
         new InvalidSyntaxError(
           this.curToken.posStart,
@@ -1069,7 +1008,7 @@ class Parser {
       this.advance();
 
       const argNodes = [];
-      if (this.curToken.type === TT_RPAREN) {
+      if ((this.curToken as Token).type === TT_RPAREN) {
         res.registerAdvancement();
         this.advance();
       } else {
@@ -1085,7 +1024,7 @@ class Parser {
         }
 
         // get arguments
-        while (this.curToken.type === TT_COMMA) {
+        while ((this.curToken as Token).type === TT_COMMA) {
           res.registerAdvancement();
           this.advance();
 
@@ -1094,7 +1033,7 @@ class Parser {
         }
 
         // check call end token
-        if (this.curToken.type !== TT_RPAREN) {
+        if ((this.curToken as Token).type !== TT_RPAREN) {
           return res.failure(
             new InvalidSyntaxError(
               this.curToken.posStart,
@@ -1251,7 +1190,10 @@ class Parser {
       // var a = 1
       res.registerAdvancement();
       this.advance();
-      if (this.curToken.type !== TT_IDENTIFIER) {
+
+      // varname
+      const varName = this.curToken;
+      if (varName.type !== TT_IDENTIFIER) {
         return res.failure(
           new InvalidSyntaxError(
             this.curToken.posStart,
@@ -1261,7 +1203,6 @@ class Parser {
         );
       }
 
-      const varName = this.curToken;
       res.registerAdvancement();
       this.advance();
 
@@ -1324,16 +1265,14 @@ class Parser {
 }
 
 class RTResult {
-  constructor() {
-    this.error = null;
-    this.value = null;
-  }
+  error?: BasicError = null;
+  value?: BasicValue = null;
 
   hasError() {
     return !!this.error;
   }
 
-  register(res) {
+  register(res: RTResult) {
     if (res instanceof RTResult) {
       if (res.hasError()) this.error = res.error;
       return res.value;
@@ -1342,35 +1281,39 @@ class RTResult {
     }
   }
 
-  success(value) {
+  success(value: BasicValue) {
     this.value = value;
     return this;
   }
 
-  failure(error) {
+  failure(error: BasicError) {
     this.error = error;
     return this;
   }
 }
 
-class Value {
+abstract class BasicValue {
+  posStart?: Position;
+  posEnd?: Position;
+  context?: BasicContext;
+
   constructor() {
     this.setPos();
     this.setContext();
   }
 
-  setPos(posStart, posEnd) {
+  setPos(posStart?: Position, posEnd?: Position) {
     this.posStart = posStart;
     this.posEnd = posEnd;
     return this;
   }
 
-  setContext(context) {
+  setContext(context?: BasicContext) {
     this.context = context;
     return this;
   }
 
-  illegalOperation(other = null) {
+  illegalOperation(other?: BasicValue): BasicValue | RTError {
     if (!other) other = this;
     return new RTError(
       this.posStart,
@@ -1380,81 +1323,61 @@ class Value {
     );
   }
 
-  add(other) {
+  add(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  sub(other) {
+  sub(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  mul(other) {
+  mul(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
-  div(other) {
-    return this.illegalOperation(other);
-  }
-
-  pow(other) {
+  div(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpEq(other) {
+  pow(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpNe(other) {
+  cmpEq(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpLt(other) {
+  cmpNe(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpGt(other) {
+  cmpLt(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpLte(other) {
+  cmpGt(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  cmpGte(other) {
+  cmpLte(other: BasicValue): BasicValue | RTError {
     return this.illegalOperation(other);
   }
 
-  and(other) {
-    return this.illegalOperation(other);
-  }
-
-  or(other) {
-    return this.illegalOperation(other);
-  }
-
-  not() {
-    return this.illegalOperation(other);
-  }
-
-  execute(args) {
-    return new RTResult().failure(this.illegalOperation());
-  }
-
-  copy() {
-    throw "No copy method defined";
-  }
-
-  isTrue() {
-    return false;
-  }
+  // TODO: 每种类型的Value都应该实现所有的运算符号
+  abstract cmpGte(other: BasicValue): BasicValue;
+  abstract and(other: BasicValue): BasicValue;
+  abstract or(other: BasicValue): BasicValue;
+  abstract not(): BasicValue;
+  abstract copy(): BasicValue;
+  abstract isTrue(): boolean;
+  abstract toString(): string;
 }
 
-class StringValue extends Value {
-  constructor(value) {
+class StringValue extends BasicValue {
+  constructor(public value: string) {
     super();
-    this.value = value;
   }
 
-  add(other) {
+  add(other: BasicValue) {
     if (other instanceof StringValue) {
       return new StringValue(this.value + other.value).setContext(this.context);
     } else if (other instanceof NumberValue) {
@@ -1466,7 +1389,7 @@ class StringValue extends Value {
     }
   }
 
-  mul(other) {
+  mul(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new StringValue(this.value.repeat(other.value)).setContext(
         this.context
@@ -1476,7 +1399,7 @@ class StringValue extends Value {
     }
   }
 
-  cmpEq(other) {
+  cmpEq(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value === other.value)).setContext(
         this.context
@@ -1486,7 +1409,7 @@ class StringValue extends Value {
     }
   }
 
-  cmpNe(other) {
+  cmpNe(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value !== other.value)).setContext(
         this.context
@@ -1496,7 +1419,7 @@ class StringValue extends Value {
     }
   }
 
-  cmpLt(other) {
+  cmpLt(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value < other.value)).setContext(
         this.context
@@ -1506,7 +1429,7 @@ class StringValue extends Value {
     }
   }
 
-  cmpGt(other) {
+  cmpGt(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value > other.value)).setContext(
         this.context
@@ -1516,7 +1439,7 @@ class StringValue extends Value {
     }
   }
 
-  cmpLte(other) {
+  cmpLte(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value <= other.value)).setContext(
         this.context
@@ -1584,13 +1507,12 @@ class StringValue extends Value {
   }
 }
 
-class NumberValue extends Value {
-  constructor(value) {
+class NumberValue extends BasicValue {
+  constructor(public value: number) {
     super();
-    this.value = value;
   }
 
-  add(other) {
+  add(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value + other.value).setContext(this.context);
     } else {
@@ -1737,12 +1659,14 @@ class NumberValue extends Value {
   }
 }
 
-class FunctionValue extends Value {
-  constructor(name, bodyNode, argNames) {
+class FunctionValue extends BasicValue {
+  constructor(
+    public name: string | null,
+    public bodyNode: BasicNode,
+    public argNames: any[]
+  ) {
     super();
     this.name = name || "<anonymous>";
-    this.bodyNode = bodyNode;
-    this.argNames = argNames;
   }
 
   exceute(args) {
@@ -1750,8 +1674,12 @@ class FunctionValue extends Value {
 
     // 每次函数运行都是新的上下文
     const interpreter = new Interpreter();
-    const newContext = new Context(this.name, this.context, this.posStart);
-    newContext.symbolTable = new SymbolTable(this.context.symbolTable);
+    const newContext = new BasicContext(
+      this.name,
+      this.context,
+      this.posStart,
+      new SymbolTable(this.context.symbolTable)
+    );
 
     if (args.length > this.argNames.length) {
       return res.failure(
@@ -1787,6 +1715,31 @@ class FunctionValue extends Value {
     return res.success(value);
   }
 
+  isTrue(): boolean {
+    return true;
+  }
+
+  not() {
+    return new NumberValue(0).setContext(this.context);
+  }
+
+  cmpGte(other: BasicValue): BasicValue {
+    throw new RTError(
+      other.posStart,
+      other.posEnd,
+      `Uncaught SyntaxError: Unexpected token '>='`,
+      this.context
+    );
+  }
+
+  and(other: BasicValue): BasicValue {
+    return !this.isTrue() ? this : other;
+  }
+
+  or(other: BasicValue): BasicValue {
+    return this.isTrue() ? this : other;
+  }
+
   copy() {
     const result = new FunctionValue(this.name, this.bodyNode, this.argNames);
     result.setContext(this.context);
@@ -1799,10 +1752,9 @@ class FunctionValue extends Value {
   }
 }
 
-class ListValue extends Value {
-  constructor(elements) {
+class ListValue extends BasicValue {
+  constructor(public elements: any[]) {
     super();
-    this.elements = elements;
   }
 
   add(other) {
@@ -1829,6 +1781,14 @@ class ListValue extends Value {
     }
   }
 
+  cmpGte(other: BasicValue): BasicValue {
+    return new NumberValue(1).setContext(this.context);
+  }
+
+  or(other: BasicValue): BasicValue {
+    return this.isTrue() ? this : other;
+  }
+
   copy() {
     const result = new ListValue(this.elements.slice());
     result.setPos(this.posStart, this.posEnd);
@@ -1836,28 +1796,31 @@ class ListValue extends Value {
     return result;
   }
 
+  isTrue(): boolean {
+    return true;
+  }
+
+  and(other: BasicValue): BasicValue {
+    return !this.isTrue() ? this : other;
+  }
+
+  not() {
+    return new NumberValue(0).setContext(this.context);
+  }
+
   toString() {
     return `[${this.elements.join(", ")}]`;
-  }
-}
-// 保存当前程序的上下文
-class Context {
-  constructor(contextName, parent, parentEntryPos) {
-    this.contextName = contextName;
-    this.parent = parent;
-    this.parentEntryPos = parentEntryPos;
-    this.symbolTable = null;
   }
 }
 
 // 储存所有变量
 class SymbolTable {
-  constructor(parent = null) {
-    this.symbols = {};
-    this.parent = parent; // parent context symbol table
-  }
+  symbols: {
+    [name: string]: BasicValue;
+  } = {};
+  constructor(public parent?: SymbolTable) {}
 
-  get(name) {
+  get(name: string) {
     const value = this.symbols[name] ?? null;
     if (value === null && this.parent) {
       return this.parent.get(name);
@@ -1865,13 +1828,23 @@ class SymbolTable {
     return value;
   }
 
-  set(name, value) {
+  set(name: string, value: BasicValue) {
     this.symbols[name] = value;
   }
 
-  del(name) {
+  del(name: string) {
     delete this.symbols[name];
   }
+}
+
+// 保存当前程序的上下文
+class BasicContext {
+  constructor(
+    public contextName: string,
+    public parent?: BasicContext,
+    public parentEntryPos?: Position,
+    public symbolTable?: SymbolTable
+  ) {}
 }
 
 /**
@@ -1882,7 +1855,7 @@ class Interpreter {
   constructor() {}
 
   // 解析node AST
-  visit(node, context) {
+  visit(node: BasicNode, context: BasicContext) {
     if (node instanceof NumberNode) {
       return this.visitNumberNode(node, context);
     } else if (node instanceof StringNode) {
@@ -1912,7 +1885,7 @@ class Interpreter {
     }
   }
 
-  visitListNode(node, context) {
+  visitListNode(node: ListNode, context: BasicContext) {
     const res = new RTResult();
     const elements = [];
 
@@ -1928,7 +1901,7 @@ class Interpreter {
     );
   }
 
-  visitStringNode(node, context) {
+  visitStringNode(node: StringNode, context: BasicContext) {
     const res = new RTResult();
     return res.success(
       new StringValue(node.token.value)
@@ -1938,7 +1911,7 @@ class Interpreter {
   }
 
   // 函数定义
-  visitFuncDefNode(node, context) {
+  visitFuncDefNode(node: FuncDefNode, context: BasicContext) {
     const res = new RTResult();
     const funcName = node.varNameToken ? node.varNameToken.value : null;
     const bodyNode = node.bodyNode;
@@ -1955,10 +1928,12 @@ class Interpreter {
   }
 
   // 调用函数
-  visitCallNode(node, context) {
+  visitCallNode(node: CallNode, context: BasicContext) {
     const res = new RTResult();
     const args = [];
-    let valueToCall = res.register(this.visit(node.nodeToCall, context));
+    let valueToCall: FunctionValue = res.register(
+      this.visit(node.nodeToCall, context)
+    ) as FunctionValue;
     if (res.hasError()) return res;
     valueToCall = valueToCall.copy().setPos(node.posStart, node.posEnd);
 
@@ -1972,7 +1947,7 @@ class Interpreter {
     return res.success(returnValue);
   }
 
-  visitWhileNode(node, context) {
+  visitWhileNode(node: WhileNode, context: BasicContext) {
     const res = new RTResult();
     const elements = [];
 
@@ -1992,28 +1967,32 @@ class Interpreter {
     );
   }
 
-  visitForNode(node, context) {
+  visitForNode(node: ForNode, context: BasicContext) {
     const res = new RTResult();
     const elements = [];
 
-    const startValue = res.register(this.visit(node.startNode, context));
+    const startValue: BasicValue = res.register(
+      this.visit(node.startNode, context)
+    );
     if (res.hasError()) return res;
 
     const endValue = res.register(this.visit(node.endNode, context));
     if (res.hasError()) return res;
 
-    let stepValue = new NumberValue(1);
+    let stepValue: NumberValue = new NumberValue(1);
     if (node.stepNode) {
-      stepValue = res.register(this.visit(node.stepNode, context));
+      stepValue = res.register(
+        this.visit(node.stepNode, context)
+      ) as NumberValue;
       if (res.hasError()) return res;
     }
 
-    let i = startValue.value;
+    let i = (startValue as NumberValue).value;
     let condition = null;
     if (stepValue.value >= 0) {
-      condition = () => i < endValue.value;
+      condition = () => i < (startValue as NumberValue).value;
     } else {
-      condition = () => i > endValue.value;
+      condition = () => i > (startValue as NumberValue).value;
     }
 
     while (condition()) {
@@ -2031,7 +2010,7 @@ class Interpreter {
     );
   }
 
-  visitIfNode(node, context) {
+  visitIfNode(node: IfNode, context: BasicContext) {
     const res = new RTResult();
 
     for (const [condition, _expr] of node.cases) {
@@ -2055,7 +2034,7 @@ class Interpreter {
   }
 
   // 访问变量
-  visitVarAccessNode(node, context) {
+  visitVarAccessNode(node: VarAccessNode, context: BasicContext) {
     const res = new RTResult();
     const varName = node.varNameToken.value;
     let value = context.symbolTable.get(varName);
@@ -2078,7 +2057,7 @@ class Interpreter {
   }
 
   // 定义变量
-  visitVarAssignNode(node, context) {
+  visitVarAssignNode(node: VarAssignNode, context: BasicContext) {
     const res = new RTResult();
     const varName = node.varNameToken.value;
     const value = res.register(this.visit(node.valueNode, context)); // 获取value
@@ -2087,14 +2066,18 @@ class Interpreter {
     return res.success(value);
   }
 
-  visitNumberNode(node, context) {
+  visitNumberNode(node: NumberNode, context: BasicContext) {
     return new RTResult().success(
-      new NumberValue(node.token.value)
+      new NumberValue(
+        node.token.type === TT_INT
+          ? parseInt(node.token.value, 10)
+          : parseFloat(node.token.value)
+      )
         .setContext(context)
         .setPos(node.posStart, node.posEnd)
     );
   }
-  visitBinOpNode(node, context) {
+  visitBinOpNode(node: BinOpNode, context: BasicContext) {
     const res = new RTResult();
     const left = res.register(this.visit(node.leftNode, context));
     if (res.hasError()) return res;
@@ -2152,13 +2135,14 @@ class Interpreter {
     }
     return res.success(result.setPos(node.posStart, node.posEnd));
   }
-  visitUnaryOpNode(node, context) {
+
+  visitUnaryOpNode(node: UnaryOpNode, context: BasicContext) {
     const res = new RTResult();
-    let numberValue = res.register(this.visit(node.node, context));
+    let numberValue: BasicValue = res.register(this.visit(node.node, context));
     if (res.hasError()) return res;
 
     if (node.token.type == TT_MINUS) {
-      numberValue = numberValue.mul(new NumberValue(-1));
+      numberValue = numberValue.mul(new NumberValue(-1)) as NumberValue;
     } else if (node.token.matches(TT_KEYWORD, "!")) {
       numberValue = numberValue.not();
     }
@@ -2172,7 +2156,7 @@ globalSymbolTable.set("null", new NumberValue(0));
 globalSymbolTable.set("true", new NumberValue(1));
 globalSymbolTable.set("false", new NumberValue(0));
 
-module.exports = function run(fileName, text) {
+export function run(fileName, text) {
   // Generate tokens
   const lexer = new Lexer(fileName, text);
   const tokens = lexer.makeTokens();
@@ -2185,10 +2169,9 @@ module.exports = function run(fileName, text) {
 
   // run progra
   const interpreter = new Interpreter();
-  const context = new Context("<program>");
-  context.symbolTable = globalSymbolTable;
+  const context = new BasicContext("<program>", null, null, globalSymbolTable);
   const rtRes = interpreter.visit(res.node, context);
 
   if (rtRes.hasError()) throw rtRes.error;
   return rtRes.value;
-};
+}

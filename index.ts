@@ -1,5 +1,5 @@
-const readline = require("readline");
-const basic = require("./basic");
+import * as readline from "readline";
+import * as basic from "./basic";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -9,7 +9,7 @@ const rl = readline.createInterface({
 const waitForUserInput = function () {
   rl.question("basic> ", (text) => {
     try {
-      const result = basic("<stdin>", text);
+      const result = basic.run("<stdin>", text);
       if (result) console.log(result.toString());
     } catch (error) {
       console.log(error.toString());
