@@ -1297,14 +1297,15 @@ abstract class BasicValue {
   posEnd?: Position;
   context?: BasicContext;
 
-  constructor() {
-    this.setPos();
-    this.setContext();
-  }
-
   setPos(posStart?: Position, posEnd?: Position) {
     this.posStart = posStart;
     this.posEnd = posEnd;
+    return this;
+  }
+
+  setPosWithNode(node: BasicNode) {
+    this.posStart = node.posStart;
+    this.posEnd = node.posEnd;
     return this;
   }
 
@@ -1313,9 +1314,8 @@ abstract class BasicValue {
     return this;
   }
 
-  illegalOperation(other?: BasicValue): BasicValue | RTError {
-    if (!other) other = this;
-    return new RTError(
+  illegalOperation() {
+    throw new RTError(
       this.posStart,
       this.posEnd,
       `Illegal operation`,
@@ -1323,58 +1323,156 @@ abstract class BasicValue {
     );
   }
 
-  add(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  sub(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  mul(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-  div(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  pow(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  cmpEq(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  cmpNe(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  cmpLt(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  cmpGt(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  cmpLte(other: BasicValue): BasicValue | RTError {
-    return this.illegalOperation(other);
-  }
-
-  // TODO: 每种类型的Value都应该实现所有的运算符号
-  abstract cmpGte(other: BasicValue): BasicValue;
-  abstract and(other: BasicValue): BasicValue;
-  abstract or(other: BasicValue): BasicValue;
-  abstract not(): BasicValue;
+  abstract add(other: BasicValue): BasicValue; // +
+  abstract sub(other: BasicValue): BasicValue; // -
+  abstract mul(other: BasicValue): BasicValue; // *
+  abstract div(other: BasicValue): BasicValue; // /
+  abstract pow(other: BasicValue): BasicValue; // **
+  abstract cmpEq(other: BasicValue): BasicValue; // ==
+  abstract cmpNe(other: BasicValue): BasicValue; // !=
+  abstract cmpLt(other: BasicValue): BasicValue; // <
+  abstract cmpGt(other: BasicValue): BasicValue; // >
+  abstract cmpLte(other: BasicValue): BasicValue; // <=
+  abstract cmpGte(other: BasicValue): BasicValue; // >=
+  abstract and(other: BasicValue): BasicValue; // &&
+  abstract or(other: BasicValue): BasicValue; // ||
+  abstract not(): BasicValue; // !
   abstract copy(): BasicValue;
   abstract isTrue(): boolean;
   abstract toString(): string;
+  abstract toNumber(): number;
+}
+
+class BoolValue extends BasicValue {
+  value: boolean;
+  constructor(value: string | number | boolean) {
+    super();
+    if (typeof value === "string") {
+      this.value = value === "true" ? true : false;
+    } else if (typeof value === "number") {
+      this.value = !!value;
+    } else if (typeof value === "boolean") {
+      this.value = value;
+    }
+  }
+
+  add(other: BasicValue): BasicValue {
+    return new NumberValue(this.toNumber() + other.toNumber()).setContext(
+      this.context
+    );
+  }
+  sub(other: BasicValue): BasicValue {
+    return new NumberValue(this.toNumber() - other.toNumber()).setContext(
+      this.context
+    );
+  }
+  mul(other: BasicValue): BasicValue {
+    return new NumberValue(this.toNumber() * other.toNumber()).setContext(
+      this.context
+    );
+  }
+  div(other: BasicValue): BasicValue {
+    return new NumberValue(this.toNumber() / other.toNumber()).setContext(
+      this.context
+    );
+  }
+  pow(other: BasicValue): BasicValue {
+    return new NumberValue(this.toNumber() ** other.toNumber()).setContext(
+      this.context
+    );
+  }
+  cmpEq(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() === other.toNumber()).setContext(
+      this.context
+    );
+  }
+  cmpNe(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() !== other.toNumber()).setContext(
+      this.context
+    );
+  }
+  cmpLt(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() < other.toNumber()).setContext(
+      this.context
+    );
+  }
+  cmpGt(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() > other.toNumber()).setContext(
+      this.context
+    );
+  }
+  cmpLte(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() <= other.toNumber()).setContext(
+      this.context
+    );
+  }
+
+  cmpGte(other: BasicValue): BasicValue {
+    return new BoolValue(this.toNumber() >= other.toNumber()).setContext(
+      this.context
+    );
+  }
+
+  and(other: BasicValue): BasicValue {
+    return !this.isTrue() ? this : other;
+  }
+
+  or(other: BasicValue): BasicValue {
+    return this.isTrue() ? this : other;
+  }
+
+  not(): BasicValue {
+    return new BoolValue(!this.value).setContext(this.context);
+  }
+
+  copy(): BasicValue {
+    return new BoolValue(this.value).setContext(this.context);
+  }
+
+  isTrue(): boolean {
+    return this.value;
+  }
+
+  toString(): string {
+    return this.value ? "true" : "false";
+  }
+
+  toNumber(): number {
+    return this.value ? 1 : 0;
+  }
 }
 
 class StringValue extends BasicValue {
+  sub(other: BasicValue): BasicValue {
+    throw new RTError(
+      other.posEnd,
+      other.posEnd,
+      `string - string`,
+      this.context
+    );
+  }
+  div(other: BasicValue): BasicValue {
+    throw new RTError(
+      other.posEnd,
+      other.posEnd,
+      `string / string`,
+      this.context
+    );
+  }
+  pow(other: BasicValue): BasicValue {
+    throw new RTError(
+      other.posEnd,
+      other.posEnd,
+      `string ** string`,
+      this.context
+    );
+  }
   constructor(public value: string) {
     super();
+  }
+
+  toNumber(): number {
+    return this.value.length ? 1 : 0;
   }
 
   add(other: BasicValue) {
@@ -1385,7 +1483,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1395,7 +1493,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1405,7 +1503,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1415,7 +1513,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1425,7 +1523,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1435,7 +1533,7 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1445,21 +1543,21 @@ class StringValue extends BasicValue {
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpGte(other) {
+  cmpGte(other: BasicValue) {
     if (other instanceof NumberValue || other instanceof StringValue) {
       return new NumberValue(Number(this.value >= other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  and(other) {
+  and(other: BasicValue) {
     if (other instanceof StringValue) {
       return new StringValue(
         this.isTrue() ? other.value : this.value
@@ -1469,11 +1567,11 @@ class StringValue extends BasicValue {
         return new StringValue(this.value).setContext(this.context);
       else return new NumberValue(other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  or(other) {
+  or(other: BasicValue) {
     if (other instanceof StringValue) {
       return new StringValue(
         this.isTrue() ? this.value : other.value
@@ -1483,7 +1581,7 @@ class StringValue extends BasicValue {
         return new StringValue(this.value).setContext(this.context);
       else return new NumberValue(other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1512,29 +1610,33 @@ class NumberValue extends BasicValue {
     super();
   }
 
+  toNumber(): number {
+    return this.value;
+  }
+
   add(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value + other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  sub(other) {
+  sub(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value - other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
-  mul(other) {
+  mul(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value * other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
-  div(other) {
+  div(other: BasicValue) {
     if (other instanceof NumberValue) {
       if (other.value === 0) {
         throw new RTError(
@@ -1546,96 +1648,96 @@ class NumberValue extends BasicValue {
       }
       return new NumberValue(this.value / other.value).setContext(this.context);
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
-  pow(other) {
+  pow(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(this.value ** other.value).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpEq(other) {
+  cmpEq(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value === other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpNe(other) {
+  cmpNe(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value !== other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpLt(other) {
+  cmpLt(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value < other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpGt(other) {
+  cmpGt(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value > other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpLte(other) {
+  cmpLte(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value <= other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  cmpGte(other) {
+  cmpGte(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value >= other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  and(other) {
+  and(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value && other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  or(other) {
+  or(other: BasicValue) {
     if (other instanceof NumberValue) {
       return new NumberValue(Number(this.value || other.value)).setContext(
         this.context
       );
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1667,6 +1769,93 @@ class FunctionValue extends BasicValue {
   ) {
     super();
     this.name = name || "<anonymous>";
+  }
+
+  add(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  sub(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  mul(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  div(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  pow(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpEq(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpNe(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpLt(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpGt(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  cmpLte(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  toNumber(): number {
+    return 1;
   }
 
   exceute(args) {
@@ -1753,31 +1942,95 @@ class FunctionValue extends BasicValue {
 }
 
 class ListValue extends BasicValue {
-  constructor(public elements: any[]) {
+  constructor(public elements: BasicValue[]) {
     super();
   }
 
-  add(other) {
+  mul(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  pow(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpEq(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+  cmpNe(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  cmpLt(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  cmpGt(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  cmpLte(other: BasicValue): BasicValue {
+    throw new RTError(
+      this.posStart,
+      this.posEnd,
+      `Illegal operation`,
+      this.context
+    );
+  }
+
+  toNumber(): number {
+    return 1;
+  }
+
+  add(other: BasicValue) {
     const newList = this.copy();
-    newList.elements.push(other.value);
+    newList.elements.push(other);
     return newList;
   }
 
-  sub(other) {
+  sub(other: BasicValue) {
     if (other instanceof NumberValue) {
       const newList = this.copy();
       newList.elements.splice(other.value, 1);
       return newList;
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
-  div(other) {
+  div(other: BasicValue) {
     if (other instanceof NumberValue) {
       return this.elements[other.value];
     } else {
-      this.illegalOperation(other);
+      this.illegalOperation();
     }
   }
 
@@ -1820,7 +2073,7 @@ class SymbolTable {
   } = {};
   constructor(public parent?: SymbolTable) {}
 
-  get(name: string) {
+  get(name: string): BasicValue {
     const value = this.symbols[name] ?? null;
     if (value === null && this.parent) {
       return this.parent.get(name);
@@ -1895,18 +2148,14 @@ class Interpreter {
     }
 
     return res.success(
-      new ListValue(elements)
-        .setContext(context)
-        .setPos(node.posStart, node.posEnd)
+      new ListValue(elements).setContext(context).setPosWithNode(node)
     );
   }
 
   visitStringNode(node: StringNode, context: BasicContext) {
     const res = new RTResult();
     return res.success(
-      new StringValue(node.token.value)
-        .setContext(context)
-        .setPos(node.posStart, node.posEnd)
+      new StringValue(node.token.value).setContext(context).setPosWithNode(node)
     );
   }
 
@@ -1917,8 +2166,7 @@ class Interpreter {
     const bodyNode = node.bodyNode;
     const argNames = node.argNameTokens.map((t) => t.value);
     const funcValue = new FunctionValue(funcName, bodyNode, argNames);
-    funcValue.setContext(context);
-    funcValue.setPos(node.posStart, node.posEnd);
+    funcValue.setContext(context).setPosWithNode(node);
 
     if (node.varNameToken) {
       context.symbolTable.set(funcName, funcValue);
@@ -1935,7 +2183,7 @@ class Interpreter {
       this.visit(node.nodeToCall, context)
     ) as FunctionValue;
     if (res.hasError()) return res;
-    valueToCall = valueToCall.copy().setPos(node.posStart, node.posEnd);
+    valueToCall = valueToCall.copy().setPosWithNode(node);
 
     for (const argNode of node.argNodes) {
       args.push(res.register(this.visit(argNode, context)));
@@ -1961,9 +2209,7 @@ class Interpreter {
     }
 
     return res.success(
-      new ListValue(elements)
-        .setContext(context)
-        .setPos(node.posStart, node.posEnd)
+      new ListValue(elements).setContext(context).setPosWithNode(node)
     );
   }
 
@@ -2004,9 +2250,7 @@ class Interpreter {
     }
 
     return res.success(
-      new ListValue(elements)
-        .setContext(context)
-        .setPos(node.posStart, node.posEnd)
+      new ListValue(elements).setContext(context).setPosWithNode(node)
     );
   }
 
@@ -2052,7 +2296,7 @@ class Interpreter {
     // 修复错误消息定位
     // var a = 0
     // 10 / a
-    value = value.copy().setPos(node.posStart, node.posEnd);
+    value = value.copy().setPosWithNode(node);
     return res.success(value);
   }
 
@@ -2074,7 +2318,7 @@ class Interpreter {
           : parseFloat(node.token.value)
       )
         .setContext(context)
-        .setPos(node.posStart, node.posEnd)
+        .setPosWithNode(node)
     );
   }
   visitBinOpNode(node: BinOpNode, context: BasicContext) {
@@ -2085,7 +2329,7 @@ class Interpreter {
     const right = res.register(this.visit(node.rightNode, context));
     if (res.hasError()) return res;
 
-    let result;
+    let result: BasicValue = null;
     switch (node.token.type) {
       case TT_PLUS:
         result = left.add(right);
@@ -2133,7 +2377,7 @@ class Interpreter {
         }
         break;
     }
-    return res.success(result.setPos(node.posStart, node.posEnd));
+    return res.success(result.setPosWithNode(node));
   }
 
   visitUnaryOpNode(node: UnaryOpNode, context: BasicContext) {
@@ -2147,14 +2391,16 @@ class Interpreter {
       numberValue = numberValue.not();
     }
 
-    return res.success(numberValue.setPos(node.posStart, node.posEnd));
+    return res.success(numberValue.setPosWithNode(node));
   }
 }
 
 const globalSymbolTable = new SymbolTable();
+
+// TODO: 设置为全局变量意味可以被改变，以后可以设置为KEYWORD
 globalSymbolTable.set("null", new NumberValue(0));
-globalSymbolTable.set("true", new NumberValue(1));
-globalSymbolTable.set("false", new NumberValue(0));
+globalSymbolTable.set("true", new BoolValue(1));
+globalSymbolTable.set("false", new BoolValue(0));
 
 export function run(fileName, text) {
   // Generate tokens
