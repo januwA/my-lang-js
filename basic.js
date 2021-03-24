@@ -16,6 +16,8 @@ const TT_POW = "POW"; // **
 const TT_EQ = "EQ";
 const TT_LPAREN = "LPAREN"; // (
 const TT_RPAREN = "RPAREN"; // )
+const TT_LSQUARE = "LSQUARE"; // [
+const TT_RSQUARE = "RSQUARE"; // ]
 const TT_EE = "EE"; // ==
 const TT_NE = "NE"; // !=
 const TT_LT = "LT"; // <
@@ -231,6 +233,16 @@ class Lexer {
 
         case ")":
           tokens.push(new Token(TT_RPAREN, null, this.pos));
+          this.advance();
+          break;
+
+        case "[":
+          tokens.push(new Token(TT_LSQUARE, null, this.pos));
+          this.advance();
+          break;
+
+        case "]":
+          tokens.push(new Token(TT_RSQUARE, null, this.pos));
           this.advance();
           break;
 
@@ -472,6 +484,16 @@ class StringNode extends Node {
   }
 }
 
+class ListNode extends Node {
+  constructor(elementNodes, posStart, posEnd) {
+    super({
+      posStart: posStart,
+      posEnd: posEnd,
+    });
+    this.elementNodes = elementNodes;
+  }
+}
+
 // 使用变量
 class VarAccessNode extends Node {
   constructor(varNameToken) {
@@ -645,7 +667,7 @@ class Parser {
     if (this.index < this.tokens.length) {
       this.curToken = this.tokens[this.index];
     } else {
-      return this.curToken;
+      this.curToken = null;
     }
   }
 
@@ -656,11 +678,70 @@ class Parser {
         new InvalidSyntaxError(
           this.curToken.posStart,
           this.curToken.posEnd,
-          `Expected +, -, *, /`
+          "Expected '+', '-', '*', '/', '^', '==', '!=', '<', '>', <=', '>=', '&&' or '||'"
         )
       );
     }
     return res;
+  }
+
+  listExpr() {
+    const res = new ParseRusult();
+    const elementNodes = [];
+    const posStart = this.curToken.posStart.copy();
+    if (this.curToken.type !== TT_LSQUARE) {
+      return res.failure(
+        new InvalidSyntaxError(
+          this.curToken.posStart,
+          this.curToken.posEnd,
+          `Expected '['`
+        )
+      );
+    }
+
+    res.registerAdvancement();
+    this.advance();
+
+    if (this.curToken.type === TT_RSQUARE) {
+      res.registerAdvancement();
+      this.advance();
+    } else {
+      elementNodes.push(res.register(this.expr()));
+      if (res.hasError()) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected ']', 'var', 'if', 'for', 'while', 'fun', int, float, identifier, '+', '-', '(' or '!'`
+          )
+        );
+      }
+
+      while (this.curToken.type === TT_COMMA) {
+        res.registerAdvancement();
+        this.advance();
+
+        elementNodes.push(res.register(this.expr()));
+        if (res.hasError()) return res;
+      }
+
+      if (this.curToken.type !== TT_RSQUARE) {
+        return res.failure(
+          new InvalidSyntaxError(
+            this.curToken.posStart,
+            this.curToken.posEnd,
+            `Expected ',' or ']'`
+          )
+        );
+      }
+
+      res.registerAdvancement();
+      this.advance();
+    }
+
+    return res.success(
+      new ListNode(elementNodes, posStart, this.curToken.posEnd.copy())
+    );
   }
 
   ifExpr() {
@@ -1003,23 +1084,27 @@ class Parser {
           );
         }
 
+        // get arguments
         while (this.curToken.type === TT_COMMA) {
           res.registerAdvancement();
           this.advance();
 
           argNodes.push(res.register(this.expr()));
-          if (res.hasError()) {
-            return res.failure(
-              new InvalidSyntaxError(
-                this.curToken.posStart,
-                this.curToken.posEnd,
-                `Expected ',' or ')'`
-              )
-            );
-          }
-          res.registerAdvancement();
-          this.advance();
+          if (res.hasError()) return res;
         }
+
+        // check call end token
+        if (this.curToken.type !== TT_RPAREN) {
+          return res.failure(
+            new InvalidSyntaxError(
+              this.curToken.posStart,
+              this.curToken.posEnd,
+              `Expected ',' or ')'`
+            )
+          );
+        }
+        res.registerAdvancement();
+        this.advance();
       }
 
       return res.success(new CallNode(_atom, argNodes));
@@ -1066,6 +1151,10 @@ class Parser {
           )
         );
       }
+    } else if (token.type === TT_LSQUARE) {
+      const _listExpr = res.register(this.listExpr());
+      if (res.hasError()) return res;
+      return res.success(_listExpr);
     } else if (token.matches(TT_KEYWORD, "if")) {
       const _ifExpr = res.register(this.ifExpr());
       if (res.hasError()) return res;
@@ -1204,7 +1293,7 @@ class Parser {
         new InvalidSyntaxError(
           this.curToken.posStart,
           this.curToken.posEnd,
-          `Expected 'var', 'if', 'for', 'while', 'fun', int, float, identifier, '+', '-' or '('`
+          "Expected 'var', 'if', 'for', 'while', 'fun', int, float, identifier, '+', '-', '(', '[' or '!'"
         )
       );
     return res.success(node);
@@ -1670,7 +1759,7 @@ class FunctionValue extends Value {
           this.posStart,
           this.posEnd,
           `${args.length} - ${this.argNames.length} too many args passed into '${this.name}'`,
-          self.context
+          this.context
         )
       );
     }
@@ -1681,7 +1770,7 @@ class FunctionValue extends Value {
           this.posStart,
           this.posEnd,
           `${args.length} - ${this.argNames.length} too few args passed into '${this.name}'`,
-          self.context
+          this.context
         )
       );
     }
@@ -1710,6 +1799,47 @@ class FunctionValue extends Value {
   }
 }
 
+class ListValue extends Value {
+  constructor(elements) {
+    super();
+    this.elements = elements;
+  }
+
+  add(other) {
+    const newList = this.copy();
+    newList.elements.push(other.value);
+    return newList;
+  }
+
+  sub(other) {
+    if (other instanceof NumberValue) {
+      const newList = this.copy();
+      newList.elements.splice(other.value, 1);
+      return newList;
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  div(other) {
+    if (other instanceof NumberValue) {
+      return this.elements[other.value];
+    } else {
+      this.illegalOperation(other);
+    }
+  }
+
+  copy() {
+    const result = new ListValue(this.elements.slice());
+    result.setPos(this.posStart, this.posEnd);
+    result.setContext(this.context);
+    return result;
+  }
+
+  toString() {
+    return `[${this.elements.join(", ")}]`;
+  }
+}
 // 保存当前程序的上下文
 class Context {
   constructor(contextName, parent, parentEntryPos) {
@@ -1775,9 +1905,27 @@ class Interpreter {
       return this.visitFuncDefNode(node, context);
     } else if (node instanceof CallNode) {
       return this.visitCallNode(node, context);
+    } else if (node instanceof ListNode) {
+      return this.visitListNode(node, context);
     } else {
       // error
     }
+  }
+
+  visitListNode(node, context) {
+    const res = new RTResult();
+    const elements = [];
+
+    for (const elementNode of node.elementNodes) {
+      elements.push(res.register(this.visit(elementNode, context)));
+      if (res.hasError()) return res;
+    }
+
+    return res.success(
+      new ListValue(elements)
+        .setContext(context)
+        .setPos(node.posStart, node.posEnd)
+    );
   }
 
   visitStringNode(node, context) {
@@ -1826,20 +1974,28 @@ class Interpreter {
 
   visitWhileNode(node, context) {
     const res = new RTResult();
+    const elements = [];
+
     while (true) {
       const condition = res.register(this.visit(node.conditionNode, context));
       if (res.hasError()) return res;
       if (!condition.isTrue()) break;
 
-      res.register(this.visit(node.bodyNode, context));
+      elements.push(res.register(this.visit(node.bodyNode, context)));
       if (res.hasError()) return res;
     }
 
-    return res.success(null);
+    return res.success(
+      new ListValue(elements)
+        .setContext(context)
+        .setPos(node.posStart, node.posEnd)
+    );
   }
 
   visitForNode(node, context) {
     const res = new RTResult();
+    const elements = [];
+
     const startValue = res.register(this.visit(node.startNode, context));
     if (res.hasError()) return res;
 
@@ -1864,11 +2020,15 @@ class Interpreter {
       context.symbolTable.set(node.varNameToken.value, new NumberValue(i));
       i += stepValue.value;
 
-      res.register(this.visit(node.bodyNode, context));
+      elements.push(res.register(this.visit(node.bodyNode, context)));
       if (res.hasError()) return res;
     }
 
-    return res.success(null);
+    return res.success(
+      new ListValue(elements)
+        .setContext(context)
+        .setPos(node.posStart, node.posEnd)
+    );
   }
 
   visitIfNode(node, context) {
