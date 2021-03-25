@@ -1,0 +1,25 @@
+{
+  "name": "my-lang-js",
+  "version": "1.0.0",
+  "description": "编程语言练习",
+  "main": "index.js",
+  "dependencies": {
+    "typescript": "^4.2.3"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "debug": "tsc -w"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/januwA/my-lang-js.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/januwA/my-lang-js/issues"
+  },
+  "homepage": "https://github.com/januwA/my-lang-js#readme"
+}

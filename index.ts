@@ -23,3 +23,5 @@ waitForUserInput();
 // basic("<stdin>", "if 1==1 then 2");
 
 // basic("<stdin>", `var n = 1 for i = 0 to 10 then var n = n + i`);
+
+// basic.run("<stdin>", "isList(1)");
